@@ -340,6 +340,7 @@ async function buildArea(id, A) {
   const riverRaw = A.river ? await overpass('river', 'relation["natural"="water"]["water"="river"];way(r);out geom;', 0.01) : { elements: [] };
   const greenRaw = await overpass('green', '(way["leisure"~"^(park|garden)$"];relation["leisure"="park"];way["landuse"~"^(grass|forest|recreation_ground|village_green|cemetery)$"];way["natural"~"^(wood|scrub|grassland)$"];node["natural"="tree"];);out geom;');
   const areasRaw = await overpass('areas', '(way["leisure"~"^(park|garden)$"]["name"];relation["leisure"~"^(park|garden)$"]["name"];way["place"="square"]["name"];relation["place"="square"]["name"];way["highway"="pedestrian"]["area"="yes"]["name"];);out geom;');
+  const schoolsRaw = await overpass('schools', '(way["amenity"~"^(school|college|university|kindergarten)$"];relation["amenity"~"^(school|college|university)$"];);out geom;');
   const lmRaw = await overpass('landmarks', `nwr["name"~"${A.landmarks.map(l => l[1].source.replace(/[\^$]/g, '')).join('|')}"];out center tags;`);
   const dem = await elevation();
 
@@ -446,13 +447,15 @@ async function buildArea(id, A) {
       if (t.historic === 'city_gate' || /^Porte /.test(name)) kind = 'p';            // porte de la ville (on doit pouvoir passer dessous)
       else if (/Château Frontenac/i.test(name)) kind = 'f';
       else if (/church|cathedral|chapel|basilica/.test(type) || /^(Basilique|Église|Chapelle|Cathédrale)|Church/.test(name)) kind = 'c';
+      else if (/^(school|university|college|kindergarten)$/.test(type) || /^(school|college|university|kindergarten)$/.test(t.amenity || '') ||
+        /^(École|Ecole|Collège|Académie|Pensionnat|Cégep|Université)\b/i.test(name)) kind = 's';
       else if (/commercial|retail|office|hotel|supermarket|kiosk/.test(type) || t.shop || t.amenity === 'restaurant') kind = 'k';
       else if (/house|residential|apartments|terrace|detached|semidetached/.test(type)) kind = 'r';
       else if (/garage|shed|roof|carport|hut/.test(type)) kind = 'g';
       let h = parseFloat(t.height);
       let lv = parseFloat(t['building:levels']);
       if (!(h > 0)) {
-        if (!(lv > 0)) lv = kind === 'g' ? 1 : kind === 'c' ? 0 : pickLevels(el.id);
+        if (!(lv > 0)) lv = kind === 'g' ? 1 : kind === 'c' ? 0 : kind === 's' ? 3 : pickLevels(el.id);
         h = kind === 'c' && !lv ? 18 : lv * 3.15 + 0.9 + (parseFloat(t['roof:levels']) || 0) * 2.2;
         if (kind === 'f') h = Math.max(h, 55);
       }
@@ -468,6 +471,26 @@ async function buildArea(id, A) {
     }
   }
   const bRings = buildings.map(b => { const r = []; for (let k = 0; k < b.p.length; k += 2) r.push([b.p[k], b.p[k + 1]]); return r; });
+  // cours d'école : les bâtiments qui s'y trouvent sont des écoles ; le plus grand porte le nom de l'école
+  {
+    let n = 0;
+    for (const el of schoolsRaw.elements) {
+      const gname = (el.tags || {}).name || '';
+      for (const ring of polygonsOf(el)) {
+        let best = -1, ba = 0;
+        buildings.forEach((b, i) => {
+          if (/^[cfp]$/.test(b.t || '')) return;
+          const [cx, cz] = centroid(bRings[i]);
+          if (!pointInRing(cx, cz, ring)) return;
+          if (b.t !== 's') { b.t = 's'; n++; if (b.l < 2) { b.l = 3; b.h = Math.max(b.h, 10.4); } }
+          const a = Math.abs(area(bRings[i]));
+          if (a > ba) { ba = a; best = i; }
+        });
+        if (best >= 0 && gname && !buildings[best].n) buildings[best].n = gname;
+      }
+    }
+    console.log(`  ${buildings.filter(b => b.t === 's').length} bâtiments scolaires (${n} trouvés par leur cour), ${buildings.filter(b => b.t === 'c').length} églises`);
+  }
   const bGrid = new Grid(30);
   bRings.forEach((r, i) => { const xs = r.map(p => p[0]), zs = r.map(p => p[1]); bGrid.add(i, Math.min(...xs), Math.min(...zs), Math.max(...xs), Math.max(...zs)); });
   const nearBuilding = (x, z, pad) => {
