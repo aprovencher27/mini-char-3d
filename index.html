@@ -1581,18 +1581,65 @@ function ribbonInto(A, points, width, lift, heightAt, uLen) {
   for (let i = 0; i < n - 1; i++) { const k = base + i * 2; A.idx.push(k, k + 1, k + 2, k + 1, k + 3, k + 2); }
 }
 
-function addTerrainMesh(W, cx, cz, sx, sz, cell, colorAt) {
-  const geo = new THREE.PlaneGeometry(sx, sz, Math.round(sx / cell), Math.round(sz / cell)).rotateX(-Math.PI / 2).translate(cx, 0, cz);
+// fine : rectangles [x0, x1, z0, z1] où le sol est remaillé au mètre (piscines : talus et buttes que la grille grossière raterait)
+function addTerrainMesh(W, cx, cz, sx, sz, cell, colorAt, fine = []) {
+  const nx = Math.round(sx / cell), nz = Math.round(sz / cell);
+  const geo = new THREE.PlaneGeometry(sx, sz, nx, nz).rotateX(-Math.PI / 2).translate(cx, 0, cz);
   const pos = geo.attributes.position;
   for (let i = 0; i < pos.count; i++) pos.setY(i, W.terrain(pos.getX(i), pos.getZ(i)));
-  geo.computeVertexNormals();
-  const nrm = geo.attributes.normal, colors = new Float32Array(pos.count * 3), c = new THREE.Color();
-  for (let i = 0; i < pos.count; i++) {
-    colorAt(pos.getX(i), pos.getY(i), pos.getZ(i), nrm.getY(i), c);
-    colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
+  const x0 = cx - sx / 2, z0 = cz - sz / 2, cw = sx / nx, ch = sz / nz, isFine = new Uint8Array(nx * nz), cells = [];
+  for (const [a0, a1, b0, b1] of fine) {
+    for (let j = Math.max(0, Math.floor((b0 - z0) / ch)); j <= Math.min(nz - 1, Math.floor((b1 - z0) / ch)); j++)
+      for (let i = Math.max(0, Math.floor((a0 - x0) / cw)); i <= Math.min(nx - 1, Math.floor((a1 - x0) / cw)); i++)
+        if (!isFine[j * nx + i]) { isFine[j * nx + i] = 1; cells.push(i, j); }
   }
-  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-  addMesh(W, geo, { normal: new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, flatShading: true }), retro: gridMat });
+  if (cells.length) {                                                  // la grille grossière laisse un trou…
+    const idx = [];
+    for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) {
+      if (isFine[j * nx + i]) continue;
+      const a = i + (nx + 1) * j, b = i + (nx + 1) * (j + 1), c = i + 1 + (nx + 1) * (j + 1), d = i + 1 + (nx + 1) * j;
+      idx.push(a, b, d, b, c, d);
+    }
+    geo.setIndex(idx);
+  }
+  const pair = { normal: new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, flatShading: true }), retro: gridMat };
+  const paint = g => {
+    g.computeVertexNormals();
+    const P = g.attributes.position, nrm = g.attributes.normal, colors = new Float32Array(P.count * 3), c = new THREE.Color();
+    for (let i = 0; i < P.count; i++) {
+      colorAt(P.getX(i), P.getY(i), P.getZ(i), nrm.getY(i), c);
+      colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
+    }
+    g.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    addMesh(W, g, pair);
+  };
+  paint(geo);
+  if (!cells.length) return;
+  // … bouché par des carreaux fins ; sur un bord partagé avec la grille grossière, on reste sur son arête (pas de fente)
+  const n = Math.max(2, Math.round(cell)), P = [], I = [];
+  const fineAt = (i, j) => i < 0 || j < 0 || i >= nx || j >= nz || isFine[j * nx + i] === 1;
+  const Yc = (i, j) => pos.getY(i + (nx + 1) * j);
+  for (let k = 0; k < cells.length; k += 2) {
+    const i = cells[k], j = cells[k + 1], base = P.length / 3;
+    for (let v = 0; v <= n; v++) for (let u = 0; u <= n; u++) {
+      const x = x0 + (i + u / n) * cw, z = z0 + (j + v / n) * ch;
+      let y;
+      if (u === 0 && !fineAt(i - 1, j)) y = lerp(Yc(i, j), Yc(i, j + 1), v / n);
+      else if (u === n && !fineAt(i + 1, j)) y = lerp(Yc(i + 1, j), Yc(i + 1, j + 1), v / n);
+      else if (v === 0 && !fineAt(i, j - 1)) y = lerp(Yc(i, j), Yc(i + 1, j), u / n);
+      else if (v === n && !fineAt(i, j + 1)) y = lerp(Yc(i, j + 1), Yc(i + 1, j + 1), u / n);
+      else y = W.terrain(x, z);
+      P.push(x, y, z);
+    }
+    for (let v = 0; v < n; v++) for (let u = 0; u < n; u++) {
+      const a = base + v * (n + 1) + u, b = a + n + 1;
+      I.push(a, b, a + 1, b, b + 1, a + 1);
+    }
+  }
+  const g2 = new THREE.BufferGeometry();
+  g2.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
+  g2.setIndex(I);
+  paint(g2);
 }
 function addWaterPlane(W, x0, x1, z0, z1, level) {
   const water = new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0, z1 - z0).rotateX(-Math.PI / 2).translate((x0 + x1) / 2, level, (z0 + z1) / 2));
@@ -1726,7 +1773,7 @@ class CityBatch {
     const { accs: A, edges: E } = this.tile(cx, cz);
     const kind = b.t || '';
     if (kind === 'p') { this.gate(ring, b, A, E, gMin, gMax); return; }       // porte de la ville : on passe dessous
-    const church = kind === 'c', school = kind === 's';
+    const church = kind === 'c', school = kind === 's', arena = kind === 'a';
     const name = b.n || '';
     const chateau = kind === 'f';
     const price = /Édifice Price|Price Building/.test(name);
@@ -1737,11 +1784,11 @@ class CityBatch {
     const box = obb(ring);
     const fill = -ringArea(ring) / (4 * box.ha * box.hb);
     const fac = tall ? FAC.glass : chateau ? FAC.brickBrown : price || (mansard && !church) ? FAC.greystone : church ? M_CHURCH :
-      school ? (h1(1) < 0.62 ? M_SCHOOL_R : M_SCHOOL_B) : pickW(S.facades, h1(1));
+      school ? (h1(1) < 0.62 ? M_SCHOOL_R : M_SCHOOL_B) : arena ? (h1(1) < 0.5 ? M_SCHOOL_B : FAC.brickBrown) : pickW(S.facades, h1(1));
     const wallCol = fac === FAC.painted ? pick(S.paints, h1(2)) : church || school ? gray(0.93 + h1(2) * 0.1) : gray(0.87 + h1(2) * 0.16);
     const blankCol = FACADE_AVG[fac].clone().multiply(wallCol).multiplyScalar(0.95);
     const trimCol = pick(S.trims, h1(3));
-    const hip = !tall && !mansard && !church && ((S.hip && fill > 0.78 && -ringArea(ring) < 1600 && b.h < 30) || price);
+    const hip = !tall && !mansard && !church && !arena && ((S.hip && fill > 0.78 && -ringArea(ring) < 1600 && b.h < 30) || price);
     const naveHw = church ? (fill > 0.7 ? box.hb : clamp(-ringArea(ring) / (4 * box.ha), 3, box.hb)) : 0;   // demi-largeur de la nef
     const R = church ? clamp(naveHw * 1.15, 3, 13) : hip ? (price ? clamp(box.hb * 1.25, 6, 14) : clamp(box.hb * S.pitch, 2, 11)) : 0;
     const mh = chateau ? 9 : mansard ? clamp(b.h * 0.25, 3.5, 7) : 0;          // hauteur de la mansarde
@@ -1752,9 +1799,9 @@ class CityBatch {
     const floorH = clamp((wallTop - gMin) / levels, 2.6, 4.6);
     const base = gMin - 1.2;
     const small = kind === 'g' || b.h < 4.5;
-    const signEdges = b.shops && !church && !school && !chateau && !mansard ? this.shopEdges(ring, b.shops, idx) : null;
+    const signEdges = b.shops && !church && !school && !arena && !chateau && !mansard ? this.shopEdges(ring, b.shops, idx) : null;
     let portalEdge = -1;                                               // école : l'entrée principale sur la plus longue façade sur rue
-    if (school) {
+    if (school || arena) {
       let bl = 0;
       for (let i = 0; i < n; i++) {
         const [ax, az] = ring[i], [bx, bz] = ring[(i + 1) % n], L = Math.hypot(bx - ax, bz - az);
@@ -1775,7 +1822,7 @@ class CityBatch {
       const face = party ? null : this.facing(mx, mz, nx, nz);
       const bays = party || L < 1.6 ? 0 : Math.max(1, Math.round(L / BAY));
       const signs = face && signEdges ? signEdges.get(i) : null;
-      const shop = !!face && bays > 0 && !church && !school && !chateau && !mansard &&
+      const shop = !!face && bays > 0 && !church && !school && !arena && !chateau && !mansard &&
         (!!signs || (!tall && !small && (kind === 'k' || (S.shopsOn.includes(face.k) && h1(50) < S.shopChance))));
       const g0 = shop ? Math.min(gMin + Math.max(floorH, 3.9), wallTop) : gMin;
       if (signs && shop) this.signs.add({ ax, az, ux, uz, nx, nz, L, top: g0 - 0.12, shops: signs });
@@ -1815,7 +1862,10 @@ class CityBatch {
         if (school) {
           if (i === portalEdge) this.schoolPortal(A, ax, az, ux, uz, nx, nz, L, gMin, floorH, levels, gray(0.9), name);
           else this.doors(A, ax, az, ux, uz, nx, nz, L, bays, pick(DOOR_COLORS, h1(10 + i)));
-        } else if (S.plex && !shop && kind !== 'k' && levels >= 2 && levels <= 3 && L >= 5 && L <= 40 && face.k !== 3 && face.d - face.w / 2 > 1.4) {
+        } else if (arena) {                                             // aréna : portes et grande enseigne
+          this.doors(A, ax, az, ux, uz, nx, nz, L, bays, pick(DOOR_COLORS, h1(10 + i)));
+          if (i === portalEdge) this.signs.add({ ax, az, ux, uz, nx, nz, L, top: wallTop - 0.4, shops: [{ n: (name || 'Aréna').toUpperCase(), c: 'A', x: (ax + bx) / 2, z: (az + bz) / 2 }] });
+        } else if (S.plex && !shop && kind !== 'k' && kind !== 'a' && levels >= 2 && levels <= 3 && L >= 5 && L <= 40 && face.k !== 3 && face.d - face.w / 2 > 1.4) {
           this.plexFront(A, ax, az, ux, uz, nx, nz, L, gMin, floorH, levels, parapet > 0 ? top : 0, trimCol, face, idx * 37 + i);   // duplex, triplex
         } else {
           if (!shop) this.doors(A, ax, az, ux, uz, nx, nz, L, bays, pick(DOOR_COLORS, h1(10 + i)));
@@ -1838,6 +1888,9 @@ class CityBatch {
       }
       if (chateau) { this.turrets(A, E, ring, base, top, mh, col, fac, wallCol); this.keep(A, E, ring, base, gMin, gMax, fac, wallCol, col); }
       if (civicTower) this.civicTower(A, E, ring, base, gMin, top + mh, fac, wallCol, col);
+    } else if (arena) {                                                 // toit en voûte
+      this.flatRoof(A, ring, wallTop, gray(0.42));
+      this.vaultRoof(A, E, box, wallTop, clamp(box.hb * 0.35, 2.5, 7), roofTint || pick([col3(0x8a9aa8), col3(0x5d7a8f), COPPER], h1(9)), wallCol.clone().multiply(FACADE_AVG[fac]));
     } else if (church) {                                                // toit à deux versants en tôle argentée ou en cuivre
       this.flatRoof(A, ring, wallTop, gray(0.42));
       this.gableRoof(A, E, box, wallTop, naveHw, R, roofTint || (h1(9) < 0.5 ? SILVER : COPPER), wallCol);
@@ -2103,6 +2156,22 @@ class CityBatch {
     }
     for (const [p, q] of [[r1, r2], [e1, r1], [e4, r1], [e2, r2], [e3, r2], [e1, e2], [e3, e4]]) E.push(...p, ...q);
   }
+  // voûte en tôle (arénas), pignons en demi-lune
+  vaultRoof(A, E, bx, y, rise, col, endCol) {
+    const N = 10, ax = bx.ax, az = bx.az, px = -az, pz = ax, Aa = bx.ha + 0.3, Bb = bx.hb + 0.3;
+    const P = (sa, t, bb = Bb) => { const a = Math.PI * t, sb = -Math.cos(a) * bb; return [bx.cx + ax * sa + px * sb, y + Math.sin(a) * rise, bx.cz + az * sa + pz * sb]; };
+    for (let k = 0; k < N; k++) {
+      const t0 = k / N, t1 = (k + 1) / N, tm = (t0 + t1) / 2, nb = -Math.cos(Math.PI * tm), ny = Math.sin(Math.PI * tm);
+      const a0 = P(-Aa, t0), a1 = P(-Aa, t1), b0 = P(Aa, t0), b1 = P(Aa, t1);
+      quad(A[M_ROOF_METAL], ...a0, ...b0, ...b1, ...a1, px * nb, ny, pz * nb, col, 0, k * 0.8, (2 * Aa) / 4, (k + 1) * 0.8);
+      E.push(...a0, ...b0);
+    }
+    for (const sg of [1, -1]) {
+      const pts = [];
+      for (let k = 0; k <= N; k++) pts.push(P(sg * bx.ha, k / N, bx.hb));
+      poly(A[M_TRIM], pts, pts.flatMap(() => [0, 0]), ax * sg, 0, az * sg, endCol);
+    }
+  }
   decal(A, cx, y0, cz, rx, rz, w, h, nx, nz, r, col = WHITE) {
     quad(A[M_DECAL], cx - rx * w / 2, y0, cz - rz * w / 2, cx + rx * w / 2, y0, cz + rz * w / 2, cx + rx * w / 2, y0 + h, cz + rz * w / 2, cx - rx * w / 2, y0 + h, cz - rz * w / 2,
       nx, 0, nz, col, r[0], r[1], r[2], r[3]);
@@ -2308,7 +2377,8 @@ const SIGN_STYLE = {
   t: { bg: [0x141414, 0x5a1020], fg: 0xf0c75a, neon: [2.4, 1.9, 0.4] },                          // cinémas, théâtres
   g: { bg: [0x1f5f7a, 0x2d6a2f, 0xb8452a], fg: 0xffffff, neon: [0.3, 2.2, 1.6] },                // épiceries, SAQ…
   s: { bg: [0x1f2a44, 0x5a1f4a, 0x2b2b2b, 0x7a4a14, 0x244a5a, 0x6b1d2a, 0x3d4a2a, 0xefe9dc], fg: 0xf6f1e6, neon: [1.6, 0.4, 2.3] },
-  e: { bg: [0xd9cfbd, 0xcfc5b2], fg: 0x2b2620, neon: [0.3, 1.8, 2.4] },                          // nom gravé des écoles
+  e: { bg: [0xd9cfbd, 0xcfc5b2], fg: 0x2b2620, neon: [0.3, 1.8, 2.4] },
+  A: { bg: [0x1f4f8f, 0x7a1f2b, 0x1d3b2a], fg: 0xffffff, neon: [0.3, 1.6, 2.4] },                // arénas                          // nom gravé des écoles
 };
 const SIGN_FONT = '700 33px "Barlow Semi Condensed", "Arial Narrow", Arial, sans-serif';
 const SIGN_ROW = 48, SIGN_PAGE = 2048, SIGN_H = 0.84;
@@ -2492,6 +2562,449 @@ function addStatues(W, list, signs) {
   }
 }
 
+// =====================================================================
+// Sports (OpenStreetMap) : tennis, soccer, baseball, basket, volley, pétanque, multisport, patinoires,
+// pistes d'athlétisme, jeux pour enfants, skateparks, piscines (de l'eau : on peut y plonger).
+// Buts, paniers, filets et clôtures grillagées s'envolent quand on fonce dedans.
+// =====================================================================
+const lineTex = (W, H, draw) => { const t = makeTexture(W, g => draw(g, W, H), H); t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping; return t; };
+const SURF_TEX = {
+  tennis: lineTex(256, 512, (g, W, H) => {
+    g.fillStyle = '#3f7d4a'; g.fillRect(0, 0, W, H);
+    const x0 = W * 0.195, x1 = W * 0.805, y0 = H * 0.17, y1 = H * 0.83;
+    g.fillStyle = '#2f6fa8'; g.fillRect(x0, y0, x1 - x0, y1 - y0);
+    g.strokeStyle = '#ffffff'; g.lineWidth = 3;
+    g.strokeRect(x0, y0, x1 - x0, y1 - y0);
+    const si = (x1 - x0) * 0.125, sv = (y1 - y0) * 0.27;
+    g.beginPath(); g.moveTo(x0 + si, y0); g.lineTo(x0 + si, y1); g.moveTo(x1 - si, y0); g.lineTo(x1 - si, y1);
+    g.moveTo(x0 + si, H / 2 - sv); g.lineTo(x1 - si, H / 2 - sv); g.moveTo(x0 + si, H / 2 + sv); g.lineTo(x1 - si, H / 2 + sv);
+    g.moveTo(W / 2, H / 2 - sv); g.lineTo(W / 2, H / 2 + sv); g.stroke();
+    g.fillStyle = 'rgba(20,20,20,0.6)'; g.fillRect(x0 - 8, H / 2 - 2, x1 - x0 + 16, 4);
+  }),
+  soccer: lineTex(340, 512, (g, W, H) => {
+    for (let k = 0; k < 12; k++) { g.fillStyle = k % 2 ? '#4f9a3c' : '#5aa846'; g.fillRect(0, (k * H) / 12, W, H / 12 + 1); }
+    g.strokeStyle = '#f4f4f0'; g.lineWidth = 3;
+    const m = 14; g.strokeRect(m, m, W - 2 * m, H - 2 * m);
+    g.beginPath(); g.moveTo(m, H / 2); g.lineTo(W - m, H / 2); g.stroke();
+    g.beginPath(); g.arc(W / 2, H / 2, W * 0.14, 0, Math.PI * 2); g.stroke();
+    for (const e of [0, 1]) {
+      const y = e ? H - m : m, sg = e ? -1 : 1;
+      g.strokeRect(W * 0.2, e ? y - H * 0.16 : y, W * 0.6, H * 0.16);
+      g.strokeRect(W * 0.37, e ? y - H * 0.055 : y, W * 0.26, H * 0.055);
+      g.fillStyle = '#f4f4f0'; g.beginPath(); g.arc(W / 2, y + sg * H * 0.11, 3, 0, Math.PI * 2); g.fill();
+    }
+  }),
+  baseball: lineTex(512, 512, (g, W, H) => {
+    g.fillStyle = '#5aa846'; g.fillRect(0, 0, W, H);
+    const hx = W * 0.5, hy = H * 0.9, b = W * 0.27, d = b / Math.SQRT2;
+    g.fillStyle = '#b98a5a';                                           // terre battue
+    g.beginPath(); g.moveTo(hx, hy + 18); g.arc(hx, hy, b * 1.05, -Math.PI * 0.75, -Math.PI * 0.25); g.closePath(); g.fill();
+    g.fillStyle = '#5aa846'; g.beginPath(); g.moveTo(hx, hy - 12); g.lineTo(hx + d - 14, hy - d); g.lineTo(hx, hy - 2 * d + 12); g.lineTo(hx - d + 14, hy - d); g.closePath(); g.fill();
+    g.fillStyle = '#b98a5a'; g.beginPath(); g.arc(hx, hy - d, 14, 0, Math.PI * 2); g.fill();
+    g.strokeStyle = '#f4f4f0'; g.lineWidth = 3;
+    g.beginPath(); g.moveTo(hx, hy); g.lineTo(0, hy - hx); g.moveTo(hx, hy); g.lineTo(W, hy - hx); g.stroke();
+    g.fillStyle = '#f4f4f0';
+    for (const [x, y] of [[hx, hy], [hx + d, hy - d], [hx, hy - 2 * d], [hx - d, hy - d]]) g.fillRect(x - 5, y - 5, 10, 10);
+  }),
+  basket: lineTex(256, 460, (g, W, H) => {
+    g.fillStyle = '#39689a'; g.fillRect(0, 0, W, H);
+    g.fillStyle = '#c2733d'; g.fillRect(12, 12, W - 24, H - 24);
+    g.strokeStyle = '#ffffff'; g.lineWidth = 3; g.strokeRect(12, 12, W - 24, H - 24);
+    g.beginPath(); g.moveTo(12, H / 2); g.lineTo(W - 12, H / 2); g.stroke();
+    g.beginPath(); g.arc(W / 2, H / 2, 28, 0, Math.PI * 2); g.stroke();
+    for (const e of [0, 1]) {
+      const y = e ? H - 12 : 12, sg = e ? -1 : 1;
+      g.fillStyle = '#39689a'; g.fillRect(W / 2 - 34, e ? y - 96 : y, 68, 96); g.strokeRect(W / 2 - 34, e ? y - 96 : y, 68, 96);
+      g.beginPath(); g.arc(W / 2, y + sg * 22, 104, e ? Math.PI : 0, e ? Math.PI * 2 : Math.PI); g.stroke();
+    }
+  }),
+  volley: lineTex(256, 460, (g, W, H) => {
+    g.fillStyle = '#e3cf9a'; g.fillRect(0, 0, W, H); noise(g, W, H, 3000, 0.08);
+    g.strokeStyle = '#1f5fd6'; g.lineWidth = 4; g.strokeRect(W * 0.18, H * 0.12, W * 0.64, H * 0.76);
+    g.beginPath(); g.moveTo(W * 0.18, H / 2); g.lineTo(W * 0.82, H / 2); g.stroke();
+  }),
+  boules: lineTex(256, 512, (g, W, H) => {
+    g.fillStyle = '#cdb991'; g.fillRect(0, 0, W, H); noise(g, W, H, 6000, 0.12);
+    g.strokeStyle = '#7a5232'; g.lineWidth = 8; g.strokeRect(4, 4, W - 8, H - 8);
+  }),
+  multi: lineTex(256, 460, (g, W, H) => {
+    g.fillStyle = '#5d7266'; g.fillRect(0, 0, W, H);
+    g.strokeStyle = '#ffffff'; g.lineWidth = 3; g.strokeRect(14, 14, W - 28, H - 28);
+    g.beginPath(); g.moveTo(14, H / 2); g.lineTo(W - 14, H / 2); g.stroke();
+    g.strokeStyle = '#f2c230'; g.beginPath(); g.arc(W / 2, H / 2, 34, 0, Math.PI * 2); g.stroke();
+    g.strokeStyle = '#d62f2f'; g.strokeRect(W * 0.3, 14, W * 0.4, H * 0.14); g.strokeRect(W * 0.3, H - 14 - H * 0.14, W * 0.4, H * 0.14);
+  }),
+  rink: lineTex(256, 512, (g, W, H) => {
+    g.fillStyle = '#eef4f7'; g.fillRect(0, 0, W, H);
+    g.fillStyle = '#d62f2f'; g.fillRect(0, H / 2 - 4, W, 8); g.fillRect(0, H * 0.1, W, 3); g.fillRect(0, H * 0.9 - 3, W, 3);
+    g.fillStyle = '#1f5fd6'; g.fillRect(0, H * 0.35 - 5, W, 10); g.fillRect(0, H * 0.65 - 5, W, 10);
+    g.strokeStyle = '#d62f2f'; g.lineWidth = 3;
+    for (const [x, y] of [[0.5, 0.5], [0.28, 0.2], [0.72, 0.2], [0.28, 0.8], [0.72, 0.8]]) { g.beginPath(); g.arc(W * x, H * y, 26, 0, Math.PI * 2); g.stroke(); }
+    g.fillStyle = 'rgba(31,95,214,0.5)'; g.beginPath(); g.arc(W / 2, H * 0.1, 18, 0, Math.PI); g.fill(); g.beginPath(); g.arc(W / 2, H * 0.9, 18, Math.PI, Math.PI * 2); g.fill();
+  }),
+  track: lineTex(256, 512, (g, W, H) => {
+    g.fillStyle = '#5aa846'; g.fillRect(0, 0, W, H);
+    const stadium = (inset, fill, stroke) => {
+      const r = W / 2 - inset, y0 = r + inset, y1 = H - r - inset;
+      g.beginPath(); g.arc(W / 2, y0, r, Math.PI, 0); g.lineTo(W / 2 + r, y1); g.arc(W / 2, y1, r, 0, Math.PI); g.closePath();
+      if (fill) { g.fillStyle = fill; g.fill(); }
+      if (stroke) { g.strokeStyle = stroke; g.lineWidth = 2; g.stroke(); }
+    };
+    stadium(6, '#b8452a');
+    stadium(52, '#5aa846');
+    for (let k = 1; k < 6; k++) stadium(6 + k * 7.7, null, 'rgba(255,255,255,0.85)');
+  }),
+  play: makeTexture(128, (g, S) => { g.fillStyle = '#b58a5a'; g.fillRect(0, 0, S, S); noise(g, S, S, 4000, 0.18); }),
+  skate: makeTexture(128, (g, S) => { g.fillStyle = '#a7a9ab'; g.fillRect(0, 0, S, S); noise(g, S, S, 2500, 0.06); g.fillStyle = 'rgba(0,0,0,0.12)'; g.fillRect(0, 0, S, 2); g.fillRect(0, 0, 2, S); }),
+  deck: makeTexture(128, (g, S) => { g.fillStyle = '#d6d2c8'; g.fillRect(0, 0, S, S); noise(g, S, S, 2000, 0.05); g.fillStyle = 'rgba(0,0,0,0.1)'; g.fillRect(0, 0, S, 2); g.fillRect(0, 0, 2, S); }),
+  // eau de piscine : la texture fait un couloir de large (répétée) et toute la longueur, ligne de fond au milieu
+  pool: (() => {
+    const t = makeTexture(64, (g, W, H) => {
+      const gr = g.createLinearGradient(0, 0, W, 0);
+      gr.addColorStop(0, '#2f9fd0'); gr.addColorStop(0.5, '#43b6df'); gr.addColorStop(1, '#2f9fd0');
+      g.fillStyle = gr; g.fillRect(0, 0, W, H);
+      caustics(g, W, H, 110);
+      g.fillStyle = 'rgba(22,62,140,0.85)';
+      g.fillRect(W / 2 - 3, H * 0.06, 6, H * 0.88); g.fillRect(W / 2 - 13, H * 0.06, 26, 5); g.fillRect(W / 2 - 13, H * 0.94 - 5, 26, 5);
+    }, 512);
+    t.wrapT = THREE.ClampToEdgeWrapping;
+    return t;
+  })(),
+  wade: makeTexture(128, (g, S) => { g.fillStyle = '#4cc0e2'; g.fillRect(0, 0, S, S); caustics(g, S, S, 70); }),   // pataugeoire, petite piscine
+};
+function caustics(g, W, H, n) {                                         // reflets du fond, raccordés sur les bords
+  g.strokeStyle = 'rgba(255,255,255,0.17)'; g.lineWidth = 1.4;
+  for (let k = 0; k < n; k++) {
+    const x = Math.random() * W, y = Math.random() * H, r = 3 + Math.random() * 6, rot = Math.random() * Math.PI;
+    for (const ox of [-W, 0, W]) for (const oy of [-H, 0, H]) { g.beginPath(); g.ellipse(x + ox, y + oy, r, r * 0.6, rot, 0, Math.PI * 2); g.stroke(); }
+  }
+}
+const SURF_TILED = { play: 6, skate: 5, deck: 3, wade: 4 };            // textures répétées (m par motif) plutôt que tendues
+const SURF_MATS = {};
+for (const [k, map] of Object.entries(SURF_TEX)) SURF_MATS[k] = { normal: new THREE.MeshStandardMaterial({ map, roughness: 0.85, ...offset(-3) }), retro: basic(hdr(0.7, 0.55, 1.1), { map, ...offset(-3) }) };
+for (const k of ['pool', 'wade']) {                                     // l'eau brille
+  Object.assign(SURF_MATS[k].normal, { roughness: 0.12, metalness: 0.05 });
+  SURF_MATS[k].retro = basic(hdr(0.12, 0.55, 1.2), { map: SURF_TEX[k], ...offset(-3) });
+}
+SURF_MATS.deck.retro = basic(hdr(0.3, 0.18, 0.45), { map: SURF_TEX.deck, ...offset(-3) });   // margelle : pas d'éblouissement en années 80
+// filets et grillages (alpha)
+const netTex = makeTexture(64, (g, S) => { g.clearRect(0, 0, S, S); g.strokeStyle = '#f4f4f0'; g.lineWidth = 2; for (let k = 0; k <= S; k += 8) { g.beginPath(); g.moveTo(k, 0); g.lineTo(k, S); g.moveTo(0, k); g.lineTo(S, k); g.stroke(); } });
+const chainTex = makeTexture(64, (g, S) => { g.clearRect(0, 0, S, S); g.strokeStyle = '#9aa0a6'; g.lineWidth = 2; for (let k = -S; k <= 2 * S; k += 10) { g.beginPath(); g.moveTo(k, 0); g.lineTo(k + S, S); g.moveTo(k, S); g.lineTo(k + S, 0); g.stroke(); } });
+const SPORT_MATS = {
+  normal: [new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.5, metalness: 0.3 }),
+    new THREE.MeshStandardMaterial({ map: netTex, alphaTest: 0.4, side: THREE.DoubleSide, roughness: 0.8 }),
+    new THREE.MeshStandardMaterial({ map: chainTex, alphaTest: 0.4, side: THREE.DoubleSide, roughness: 0.6, metalness: 0.4 })],
+  retro: [basic(hdr(1.6, 1.6, 1.8), { vertexColors: true }), basic(hdr(0.4, 1.8, 2.2), { map: netTex, alphaTest: 0.4, side: THREE.DoubleSide }), basic(hdr(1.8, 0.4, 1.6), { map: chainTex, alphaTest: 0.4, side: THREE.DoubleSide })],
+};
+function sportPropGeometries() {
+  const mk = build => { const A = [acc(), acc(), acc()]; build(A); return mergeAccs(A); };
+  const post = gray(0.95), metal = gray(0.55);
+  return {
+    goal: { len: 7.32, com: 1.2, mass: 70, rFlat: 0.2, mats: SPORT_MATS, geo: mk(A => {           // but de soccer, ouvert vers +z
+      for (const sg of [-1, 1]) { obox(A[0], 3.66 * sg, 0, 1, 0, 0.06, 0.06, 0, 2.44, post); obox(A[0], 3.66 * sg, -0.75, 0, 1, 0.75, 0.03, 0, 0.06, post); }
+      obox(A[0], 0, 0, 1, 0, 3.72, 0.06, 2.38, 2.5, post);
+      quad(A[1], -3.66, 0, -1.5, 3.66, 0, -1.5, 3.66, 2.44, -1.2, -3.66, 2.44, -1.2, 0, 0, 1, WHITE, 0, 0, 7.3, 2.4);
+      quad(A[1], -3.66, 2.44, 0, 3.66, 2.44, 0, 3.66, 2.44, -1.2, -3.66, 2.44, -1.2, 0, 1, 0, WHITE, 0, 0, 7.3, 1.2);
+      for (const sg of [-1, 1]) quad(A[1], 3.66 * sg, 0, 0, 3.66 * sg, 0, -1.5, 3.66 * sg, 2.44, -1.2, 3.66 * sg, 2.44, 0, sg, 0, 0, WHITE, 0, 0, 1.5, 2.4);
+    }) },
+    hoop: { len: 1.8, com: 1.8, mass: 110, rFlat: 0.25, mats: SPORT_MATS, geo: mk(A => {           // panier : poteau, bras, planche, cercle orange
+      obox(A[0], 0, -1.1, 1, 0, 0.08, 0.08, 0, 3.4, metal);
+      obox(A[0], 0, -0.55, 0, 1, 0.55, 0.05, 3.25, 3.35, metal);
+      obox(A[0], 0, 0, 1, 0, 0.9, 0.03, 2.9, 3.95, gray(1));
+      obox(A[0], 0, 0.035, 1, 0, 0.3, 0.005, 3.15, 3.5, col3(0xd62f2f));
+      for (let k = 0; k < 10; k++) { const a0 = (k / 10) * Math.PI * 2, a1 = ((k + 1) / 10) * Math.PI * 2; slab(A[0], [Math.cos(a0) * 0.23, 3.05, 0.27 + Math.sin(a0) * 0.23], [Math.cos(a1) * 0.23, 3.05, 0.27 + Math.sin(a1) * 0.23], 0.03, 0.03, col3(0xe8762b)); }
+    }) },
+    tnet: { len: 12.8, com: 0.55, mass: 25, rFlat: 0.1, mats: SPORT_MATS, geo: mk(A => {           // filet de tennis
+      for (const sg of [-1, 1]) obox(A[0], 6.4 * sg, 0, 1, 0, 0.05, 0.05, 0, 1.07, metal);
+      quad(A[1], -6.4, 0.1, 0, 6.4, 0.1, 0, 6.4, 0.95, 0, -6.4, 0.95, 0, 0, 0, 1, WHITE, 0, 0, 12.8, 0.85);
+      obox(A[0], 0, 0, 1, 0, 6.4, 0.02, 0.95, 1.02, gray(1));
+    }) },
+    vnet: { len: 9.5, com: 1.5, mass: 25, rFlat: 0.1, mats: SPORT_MATS, geo: mk(A => {            // filet de volley
+      for (const sg of [-1, 1]) obox(A[0], 4.75 * sg, 0, 1, 0, 0.05, 0.05, 0, 2.5, metal);
+      quad(A[1], -4.5, 1.45, 0, 4.5, 1.45, 0, 4.5, 2.43, 0, -4.5, 2.43, 0, 0, 0, 1, WHITE, 0, 0, 9, 1);
+    }) },
+    chain: { len: 3.2, com: 1.5, mass: 30, rFlat: 0.1, mats: SPORT_MATS, geo: mk(A => {          // panneau de clôture grillagée (3 m)
+      quad(A[2], -1.6, 0, 0, 1.6, 0, 0, 1.6, 3, 0, -1.6, 3, 0, 0, 0, 1, WHITE, 0, 0, 3.2, 3);
+      for (const sg of [-1, 1]) obox(A[0], 1.58 * sg, 0, 1, 0, 0.03, 0.03, 0, 3.05, metal);
+      obox(A[0], 0, 0, 1, 0, 1.6, 0.025, 2.97, 3.03, metal);
+    }) },
+  };
+}
+const PLAY_COLS = [0xd62f2f, 0xf2c230, 0x1f5fd6, 0x2e9d4f, 0x8338ec, 0xe8762b].map(col3);
+// Piscines : l'eau est de niveau (margelle calée sur le point le plus haut), le fond descend en pente douce comme une plage
+// (on y plonge et on en ressort sans être catapulté), et une butte de gazon rattrape le terrain autour de la margelle.
+// Installé avant le maillage du sol, qui suit donc la butte.
+function poolBasins(W, list) {
+  const T0 = W.terrain, WA = W.waterAt, pools = [];
+  W.poolOf = new Map();
+  W.fineGround = [];
+  for (const sp of list || []) {
+    if (sp.k !== 'pool') continue;
+    const box = obb(ringOf(sp.p)), px = -box.az, pz = box.ax;
+    const C = (a, b) => [box.cx + box.ax * a + px * b, box.cz + box.az * a + pz * b];
+    const big = box.ha > 8 && box.hb > 3.5, wide = big ? 1.8 : 1.1, hs = [];
+    const ni = Math.ceil((box.ha + wide) / 1.5), nj = Math.ceil((box.hb + wide) / 1.5);
+    for (let i = 0; i <= ni; i++) for (let j = 0; j <= nj; j++) hs.push(T0(...C(-box.ha - wide + (2 * (box.ha + wide) * i) / ni, -box.hb - wide + (2 * (box.hb + wide) * j) / nj)));
+    hs.sort((a, b) => a - b);
+    const q = { big, wide, deck: hs[hs.length >> 1] + 0.15, cx: box.cx, cz: box.cz, ax: box.ax, az: box.az, ha: box.ha, hb: box.hb };
+    q.bb = r => { const cs = [C(box.ha + r, box.hb + r), C(-box.ha - r, box.hb + r), C(-box.ha - r, -box.hb - r), C(box.ha + r, -box.hb - r)]; return [Math.min(...cs.map(c => c[0])), Math.max(...cs.map(c => c[0])), Math.min(...cs.map(c => c[1])), Math.max(...cs.map(c => c[1]))]; };
+    q.b = q.bb(wide + 8.5);
+    pools.push(q);
+    W.poolOf.set(sp, q);
+  }
+  if (!pools.length) return;
+  // piscines voisines (pataugeoire à côté du grand bassin) : une seule hauteur de margelle, sinon le sol ferait une marche
+  const near = (q, o) => q.b[0] < o.b[1] && o.b[0] < q.b[1] && q.b[2] < o.b[3] && o.b[2] < q.b[3];
+  for (let pass = 0; pass < 3; pass++) for (const q of pools) for (const o of pools) if (o !== q && near(q, o) && o.deck > q.deck) q.deck = o.deck;
+  const dist = (q, x, z) => { const dx = x - q.cx, dz = z - q.cz; return Math.min(q.ha - Math.abs(dx * q.ax + dz * q.az), q.hb - Math.abs(dz * q.ax - dx * q.az)); };
+  // talus : assez large pour une pente douce, mais il s'arrête avant les terrains de sport voisins
+  const others = (list || []).filter(sp => sp.k !== 'pool').map(sp => ringOf(sp.p));
+  for (const q of pools) {
+    q.lv = q.deck - 0.14;
+    let room = 8, gap = 0;
+    for (const ring of others) for (let k = 0; k < ring.length; k++) {
+      const [x0, z0] = ring[k], [x1, z1] = ring[(k + 1) % ring.length], n = Math.ceil(Math.hypot(x1 - x0, z1 - z0) / 2);
+      for (let s = 0; s <= n; s++) room = Math.min(room, -dist(q, lerp(x0, x1, s / n), lerp(z0, z1, s / n)) - q.wide - 0.6);
+    }
+    for (let k = 0; k < 24; k++) {                                     // dénivelé à rattraper au pourtour
+      const a = (k / 24) * Math.PI * 2, r = 5, ex = Math.cos(a) * (q.ha + q.wide + r), eb = Math.sin(a) * (q.hb + q.wide + r);
+      gap = Math.max(gap, Math.abs(T0(q.cx + q.ax * ex - q.az * eb, q.cz + q.az * ex + q.ax * eb) - q.deck));
+    }
+    q.berm = clamp(gap / 0.2, 1.2, Math.max(1.2, room));
+    q.b = q.bb(q.wide + q.berm + 0.5);
+    W.fineGround.push(q.bb(q.wide + q.berm + 1));
+  }
+  const pg = new Grid(24);
+  for (const q of pools) pg.add(q, q.b[0], q.b[2], q.b[1], q.b[3]);
+  // le sol reste continu partout (une marche, même petite, ferait décoller la voiture)
+  W.terrain = (x, z) => {
+    const L = pg.at(x, z);
+    if (!L.length) return T0(x, z);
+    let best = null, bt = 1;
+    for (const q of L) {
+      const d = dist(q, x, z);
+      if (d >= 0) return lerp(q.deck, q.lv - 0.9, smoothstep(0, 2.6, d));                        // fond en pente douce, depuis la margelle
+      const t = clamp((-d - q.wide) / q.berm, 0, 1);                                              // 0 sur la margelle, 1 au pied du talus
+      if (t < bt) { bt = t; best = q; }
+    }
+    const t0 = T0(x, z);
+    return best ? lerp(best.deck, t0, bt) : t0;                                                   // talus (déblai en haut, remblai en bas)
+  };
+  W.waterAt = (x, z) => { for (const q of pg.at(x, z)) if (dist(q, x, z) >= 0) return q.lv; return WA(x, z); };
+}
+function addSports(W, list) {
+  if (!list || !list.length) return;
+  Object.assign(propGeometries(), PROP_GEO.goal ? {} : sportPropGeometries());
+  const PG = PROP_GEO, T = W.terrain;
+  const surf = {}, fix = acc(), props = [];
+  const S = k => (surf[k] ||= acc());
+  // surface qui épouse le relief (ou plate à la hauteur yFlat), texture tendue sur le rectangle orienté (ou répétée)
+  const surface = (k, box, lift = 0.1, yFlat = null) => {
+    const A = S(k), tile = SURF_TILED[k], nu = Math.max(1, Math.ceil(box.hb * 2 / 5)), nv = Math.max(1, Math.ceil(box.ha * 2 / 5));
+    const px = -box.az, pz = box.ax;
+    const P = (i, j) => { const b = -box.hb + (2 * box.hb * i) / nu, a = -box.ha + (2 * box.ha * j) / nv, x = box.cx + box.ax * a + px * b, z = box.cz + box.az * a + pz * b; return [x, yFlat ?? T(x, z) + lift, z, b, a]; };
+    const uv = (b, a) => (tile ? [b / tile, a / tile] : [(b + box.hb) / (2 * box.hb), (a + box.ha) / (2 * box.ha)]);
+    for (let i = 0; i < nu; i++) for (let j = 0; j < nv; j++) {
+      const p0 = P(i, j), p1 = P(i + 1, j), p2 = P(i + 1, j + 1), p3 = P(i, j + 1);
+      const u0 = uv(p0[3], p0[4]), u2 = uv(p2[3], p2[4]);
+      quad(A, p0[0], p0[1], p0[2], p1[0], p1[1], p1[2], p2[0], p2[1], p2[2], p3[0], p3[1], p3[2], 0, 1, 0, WHITE, u0[0], u0[1], u2[0], u2[1]);
+    }
+  };
+  const prop = (type, x, z, yaw, sx, r, dx, dz) => {                  // (dx, dz) : axe du segment de collision
+    const p = { type, slot: 0, mesh: null, x, y: T(x, z), z, yaw, sx, fly: null };
+    const hl = (PG[type].len * sx) / 2;
+    p.item = addSeg(W.grid, x - dx * hl, z - dz * hl, x + dx * hl, z + dz * hl, r);
+    p.item.prop = p;
+    props.push(p);
+  };
+  const facing = (type, x, z, ix, iz, sx = 1) => prop(type, x, z, Math.atan2(ix, iz), sx, 0.12, iz, -ix);   // ouvert vers (ix, iz)
+  const along = (type, x, z, ux, uz, sx = 1, r = 0.12) => prop(type, x, z, Math.atan2(-uz, ux), sx, r, ux, uz);
+  const fence = (ax, az, bx, bz) => {
+    const L = Math.hypot(bx - ax, bz - az), n = Math.max(1, Math.round(L / 3.2)), ux = (bx - ax) / L, uz = (bz - az) / L, seg = L / n;
+    for (let k = 0; k < n; k++) along('chain', ax + ux * seg * (k + 0.5), az + uz * seg * (k + 0.5), ux, uz, seg / 3.2, 0.1);
+  };
+  W.sportRings = [];
+  const parkRamps = new Grid(16);
+  for (const sp of list) {
+    const ring = ringOf(sp.p), box = obb(ring), px = -box.az, pz = box.ax;
+    W.sportRings.push({ ring, b: [Math.min(...ring.map(q => q[0])), Math.max(...ring.map(q => q[0])), Math.min(...ring.map(q => q[1])), Math.max(...ring.map(q => q[1]))] });
+    const C = (a, b) => [box.cx + box.ax * a + px * b, box.cz + box.az * a + pz * b];
+    const ends = [1, -1];
+    switch (sp.k) {
+      case 'tennis': {
+        surface('tennis', box);
+        const [nx, nz] = C(0, 0);
+        prop('tnet', nx, nz, Math.atan2(box.ax, box.az), (box.hb * 2 * 0.72) / 12.8, 0.08, px, pz);
+        const e = 0.4, c = [C(box.ha + e, box.hb + e), C(-box.ha - e, box.hb + e), C(-box.ha - e, -box.hb - e), C(box.ha + e, -box.hb - e)];
+        for (let k = 0; k < 4; k++) fence(c[k][0], c[k][1], c[(k + 1) % 4][0], c[(k + 1) % 4][1]);
+        break;
+      }
+      case 'soccer':
+        surface('soccer', box);
+        for (const sg of ends) { const [x, z] = C(sg * (box.ha - 1.2), 0); facing('goal', x, z, -box.ax * sg, -box.az * sg, box.ha > 30 ? 1 : 0.65); }
+        break;
+      case 'basket': case 'multi':
+        surface(sp.k, box);
+        for (const sg of ends) { const [x, z] = C(sg * (box.ha - 1.3), 0); facing('hoop', x, z, -box.ax * sg, -box.az * sg); }
+        break;
+      case 'volley': {
+        surface('volley', box);
+        const [x, z] = C(0, 0);
+        prop('vnet', x, z, Math.atan2(box.ax, box.az), (box.hb * 2 * 0.8) / 9.5, 0.08, px, pz);
+        break;
+      }
+      case 'baseball': {
+        surface('baseball', box);
+        const [hx, hz] = C(-box.ha * 0.8, 0);                          // marbre ; arrêt-balle grillagé derrière
+        for (let k = -2; k <= 2; k++) {
+          const a = (k / 2) * 1.0, r = 7;
+          const bx = hx - (box.ax * Math.cos(a) + px * Math.sin(a)) * r, bz = hz - (box.az * Math.cos(a) + pz * Math.sin(a)) * r;
+          along('chain', bx, bz, px * Math.cos(a) - box.ax * Math.sin(a), pz * Math.cos(a) - box.az * Math.sin(a), 1.1, 0.1);
+        }
+        break;
+      }
+      case 'boules':
+        surface('boules', box, 0.12);
+        break;
+      case 'track':
+        surface('track', box, 0.09);
+        break;
+      case 'rink': {                                                   // patinoire : glace et bandes
+        surface('rink', box, 0.12);
+        const e = 0.1, c = [C(box.ha + e, box.hb + e), C(-box.ha - e, box.hb + e), C(-box.ha - e, -box.hb - e), C(box.ha + e, -box.hb - e)];
+        for (let k = 0; k < 4; k++) {
+          const [ax, az] = c[k], [bx, bz] = c[(k + 1) % 4], L = Math.hypot(bx - ax, bz - az), ux = (bx - ax) / L, uz = (bz - az) / L;
+          const mx = (ax + bx) / 2, mz = (az + bz) / 2, y = T(mx, mz);
+          obox(fix, mx, mz, ux, uz, L / 2, 0.08, y, y + 0.25, col3(0xf2c230));
+          obox(fix, mx, mz, ux, uz, L / 2, 0.07, y + 0.25, y + 1.1, gray(0.97));
+          obox(fix, mx, mz, ux, uz, L / 2, 0.1, y + 1.1, y + 1.16, col3(0x1f5fd6));
+          addSeg(W.grid, ax, az, bx, bz, 0.1);
+        }
+        break;
+      }
+      case 'skate': {                                                  // skatepark : béton et deux tremplins
+        surface('skate', box, 0.1);
+        for (const sg of ends) {
+          const len = Math.min(7, box.ha * 0.6), w = Math.min(4, box.hb * 1.4), h = 1.4;
+          const [x, z] = C(-sg * (box.ha * 0.2 + len), 0), fx = box.ax * sg, fz = box.az * sg, base = T(x, z) + 0.1;
+          const pp = (u, s2) => [x + fx * u - fz * s2 * w / 2, z + fz * u + fx * s2 * w / 2];
+          const [l0x, l0z] = pp(0, -1), [r0x, r0z] = pp(0, 1), [l1x, l1z] = pp(len, -1), [r1x, r1z] = pp(len, 1);
+          quad(S('skate'), l0x, base, l0z, r0x, base, r0z, r1x, base + h, r1z, l1x, base + h, l1z, 0, 1, 0, WHITE, 0, 0, w / 5, len / 5);
+          quad(fix, l1x, base - 0.2, l1z, r1x, base - 0.2, r1z, r1x, base + h, r1z, l1x, base + h, l1z, fx, 0, fz, gray(0.62));
+          for (const [ax, az, bx, bz, s2] of [[l0x, l0z, l1x, l1z, -1], [r0x, r0z, r1x, r1z, 1]]) quad(fix, ax, base - 0.2, az, bx, base - 0.2, bz, bx, base + h, bz, ax, base, az, -fz * s2, 0, fx * s2, gray(0.6));
+          const vx = -fz, vz = fx, xs = [l0x, r0x, l1x, r1x], zs = [l0z, r0z, l1z, r1z];
+          parkRamps.add({ x, z, fx, fz, vx, vz, len, w, h: h + 0.1, base: base - 0.1 }, Math.min(...xs), Math.min(...zs), Math.max(...xs), Math.max(...zs));
+        }
+        break;
+      }
+      case 'play': {                                                   // jeux : copeaux, module avec glissade, balançoires
+        surface('play', box, 0.1);
+        const [x, z] = C(box.ha * 0.35, 0), y = T(x, z), c1 = PLAY_COLS[Math.floor(hash01(Math.round(x)) * 6)], c2 = PLAY_COLS[Math.floor(hash01(Math.round(z)) * 6)];
+        for (const [a, b] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) { const [qx, qz] = [x + box.ax * a * 0.8 + px * b * 0.8, z + box.az * a * 0.8 + pz * b * 0.8]; obox(fix, qx, qz, box.ax, box.az, 0.06, 0.06, y, y + 2.6, c1); }
+        obox(fix, x, z, box.ax, box.az, 0.9, 0.9, y + 1.4, y + 1.5, col3(0x8a5a2e));
+        coneInto(fix, x, z, 1.25, y + 2.6, y + 3.4, 4, c2);
+        slab(fix, [x + box.ax * 0.9, y + 1.45, z + box.az * 0.9], [x + box.ax * 3.4, y + 0.25, z + box.az * 3.4], 0.7, 0.08, c2);
+        addCircle(W.grid, x, z, 1.1);
+        if (box.ha > 7) {
+          const [sx, sz] = C(-box.ha * 0.35, 0), ys = T(sx, sz);
+          for (const sg of [-1, 1]) {
+            const [qx, qz] = [sx + px * sg * 1.8, sz + pz * sg * 1.8];
+            slab(fix, [qx - box.ax * 0.9, ys, qz - box.az * 0.9], [qx, ys + 2.4, qz], 0.1, 0.1, c1);
+            slab(fix, [qx + box.ax * 0.9, ys, qz + box.az * 0.9], [qx, ys + 2.4, qz], 0.1, 0.1, c1);
+          }
+          slab(fix, [sx - px * 1.8, ys + 2.4, sz - pz * 1.8], [sx + px * 1.8, ys + 2.4, sz + pz * 1.8], 0.12, 0.12, c1);
+          for (const sg of [-0.8, 0.8]) { const [qx, qz] = [sx + px * sg, sz + pz * sg]; obox(fix, qx, qz, px, pz, 0.25, 0.12, ys + 0.5, ys + 0.56, gray(0.2)); }
+          addCircle(W.grid, sx - px * 1.8, sz - pz * 1.8, 0.3); addCircle(W.grid, sx + px * 1.8, sz + pz * 1.8, 0.3);
+        }
+        if (box.ha > 11 && box.hb > 5) {                               // grand parc : bascule et dôme à grimper
+          const [bx, bz] = C(box.ha * 0.05, box.hb * 0.55), yb = T(bx, bz);
+          obox(fix, bx, bz, box.ax, box.az, 0.12, 0.25, yb, yb + 0.45, gray(0.3));
+          slab(fix, [bx - box.ax * 1.9, yb + 0.18, bz - box.az * 1.9], [bx + box.ax * 1.9, yb + 0.72, bz + box.az * 1.9], 0.3, 0.07, c2);
+          addCircle(W.grid, bx, bz, 0.35);
+          const [dx, dz] = C(box.ha * 0.05, -box.hb * 0.55), yd = T(dx, dz), r = 1.7;
+          for (let m = 0; m < 4; m++) {
+            const th = (m * Math.PI) / 4, ux = Math.cos(th) * box.ax - Math.sin(th) * px, uz = Math.cos(th) * box.az - Math.sin(th) * pz;
+            for (let q = 0; q < 8; q++) {
+              const a0 = (q / 8) * Math.PI, a1 = ((q + 1) / 8) * Math.PI;
+              slab(fix, [dx + ux * r * Math.cos(a0), yd + r * Math.sin(a0), dz + uz * r * Math.cos(a0)], [dx + ux * r * Math.cos(a1), yd + r * Math.sin(a1), dz + uz * r * Math.cos(a1)], 0.07, 0.07, m % 2 ? c1 : c2);
+            }
+          }
+          addCircle(W.grid, dx, dz, r);
+        }
+        break;
+      }
+      case 'pool': {                // piscine : eau plate, margelle, câbles de couloirs, échelles, plongeoir et chaise de sauveteur
+        const q = W.poolOf.get(sp), { big, wide, deck, lv } = q;
+        const out = [C(box.ha + wide, box.hb + wide), C(-box.ha - wide, box.hb + wide), C(-box.ha - wide, -box.hb - wide), C(box.ha + wide, -box.hb - wide)];
+        W.sportRings.push({ ring: out, b: [Math.min(...out.map(c => c[0])), Math.max(...out.map(c => c[0])), Math.min(...out.map(c => c[1])), Math.max(...out.map(c => c[1]))] });
+        const e = [[box.ha, box.ha + wide, -box.hb - wide, box.hb + wide], [-box.ha - wide, -box.ha, -box.hb - wide, box.hb + wide], [-box.ha, box.ha, box.hb, box.hb + wide], [-box.ha, box.ha, -box.hb - wide, -box.hb]];
+        for (const [a0, a1, b0, b1] of e) surface('deck', { cx: box.cx + box.ax * (a0 + a1) / 2 + px * (b0 + b1) / 2, cz: box.cz + box.az * (a0 + a1) / 2 + pz * (b0 + b1) / 2, ax: box.ax, az: box.az, ha: (a1 - a0) / 2, hb: (b1 - b0) / 2 }, 0, deck);
+        for (let k = 0; k < 4; k++) {                                  // chant de la margelle et rebord blanc du bassin
+          const [ax, az] = out[k], [bx, bz] = out[(k + 1) % 4], L = Math.hypot(bx - ax, bz - az), ux = (bx - ax) / L, uz = (bz - az) / L;
+          obox(fix, (ax + bx) / 2, (az + bz) / 2, ux, uz, L / 2, 0.05, deck - 0.45, deck - 0.01, gray(0.72));
+          const h = k % 2 ? box.hb : box.ha, [ex, ez] = k === 0 ? C(0, box.hb + 0.12) : k === 1 ? C(-box.ha - 0.12, 0) : k === 2 ? C(0, -box.hb - 0.12) : C(box.ha + 0.12, 0);
+          obox(fix, ex, ez, ux, uz, h + 0.24, 0.12, lv - 0.4, deck + 0.04, gray(0.94));
+        }
+        const lanes = big ? Math.max(2, Math.round((box.hb * 2) / 2.5)) : 0;
+        const q0 = C(-box.ha, -box.hb), q1 = C(-box.ha, box.hb), q2 = C(box.ha, box.hb), q3 = C(box.ha, -box.hb);
+        if (big) quad(S('pool'), q0[0], lv, q0[1], q1[0], lv, q1[1], q2[0], lv, q2[1], q3[0], lv, q3[1], 0, 1, 0, WHITE, 0, 0, lanes, 1);
+        else quad(S('wade'), q0[0], lv, q0[1], q1[0], lv, q1[1], q2[0], lv, q2[1], q3[0], lv, q3[1], 0, 1, 0, WHITE, 0, 0, box.hb / 2, box.ha / 2);
+        for (let k = 1; k < lanes; k++) {                              // câbles de couloirs : flotteurs rouges et blancs
+          const b = -box.hb + (2 * box.hb * k) / lanes;
+          for (let q = 0; q < 12; q++) {
+            const a0 = -box.ha + (2 * box.ha * q) / 12, a1 = -box.ha + (2 * box.ha * (q + 1)) / 12, [x0, z0] = C(a0, b), [x1, z1] = C(a1, b);
+            slab(fix, [x0, lv + 0.04, z0], [x1, lv + 0.04, z1], 0.1, 0.08, q % 2 ? col3(0xd62f2f) : gray(0.97));
+          }
+        }
+        for (const sg of big ? [-0.5, 0.5] : [0.4]) {                   // échelles : deux rampes recourbées au-dessus du bord
+          const [x, z] = C(box.ha - 0.08, box.hb * sg);
+          for (const s2 of [-0.25, 0.25]) {
+            const qx = x + px * s2, qz = z + pz * s2, ox = qx + box.ax * 0.55, oz = qz + box.az * 0.55;
+            slab(fix, [ox, deck, oz], [ox, deck + 0.85, oz], 0.05, 0.05, gray(0.82));
+            slab(fix, [ox, deck + 0.85, oz], [qx, deck + 0.85, qz], 0.05, 0.05, gray(0.82));
+            slab(fix, [qx, deck + 0.85, qz], [qx - box.ax * 0.12, lv - 1.1, qz - box.az * 0.12], 0.05, 0.05, gray(0.82));
+          }
+        }
+        if (big) {
+          const [dx, dz] = C(box.ha + 0.2, box.hb * 0.25);              // plongeoir au bout profond
+          obox(fix, dx + box.ax * 0.55, dz + box.az * 0.55, box.ax, box.az, 0.35, 0.3, deck, deck + 0.48, gray(0.85));
+          obox(fix, dx - box.ax * 0.6, dz - box.az * 0.6, box.ax, box.az, 1.5, 0.26, deck + 0.46, deck + 0.53, col3(0x1f6fc2));
+          addCircle(W.grid, dx + box.ax * 0.55, dz + box.az * 0.55, 0.4);
+          const [cx2, cz2] = C(0, box.hb + wide * 0.62);                // chaise de sauveteur
+          for (const s2 of [-0.3, 0.3]) obox(fix, cx2 + box.ax * s2, cz2 + box.az * s2, box.ax, box.az, 0.05, 0.05, deck, deck + 1.8, gray(0.95));
+          obox(fix, cx2, cz2, box.ax, box.az, 0.38, 0.3, deck + 1.8, deck + 1.9, gray(0.95));
+          obox(fix, cx2 + px * 0.26, cz2 + pz * 0.26, box.ax, box.az, 0.38, 0.04, deck + 1.9, deck + 2.4, col3(0xd62f2f));
+          addCircle(W.grid, cx2, cz2, 0.45);
+        }
+        break;
+      }
+    }
+  }
+  for (const [k, A] of Object.entries(surf)) if (A.pos.length) { const m = addMesh(W, accGeometry(A), SURF_MATS[k]); m.receiveShadow = true; }
+  if (fix.pos.length) { const m = new THREE.Mesh(accGeometry(fix)); reg(m, SPORT_MATS.normal[0], SPORT_MATS.retro[0]); m.castShadow = m.receiveShadow = true; W.group.add(m); }
+  for (const type of ['goal', 'hoop', 'tnet', 'vnet', 'chain']) {
+    const L = props.filter(q => q.type === type);
+    if (!L.length) continue;
+    const m = new THREE.InstancedMesh(PG[type].geo, undefined, L.length);
+    reg(m, SPORT_MATS.normal, SPORT_MATS.retro);
+    m.castShadow = true; m.frustumCulled = false;
+    L.forEach((q, i) => { q.slot = i; q.mesh = m; });
+    W.group.add(m);
+  }
+  for (const q of props) setPropMatrix(q);
+  W.sprops = props;
+  // tremplins des skateparks
+  W.parkAt = (x, z) => {
+    let best = -Infinity;
+    for (const it of parkRamps.at(x, z)) {
+      const dx = x - it.x, dz = z - it.z, u = dx * it.fx + dz * it.fz;
+      if (u < 0 || u > it.len || Math.abs(dx * it.vx + dz * it.vz) > it.w / 2) continue;
+      best = Math.max(best, it.base + it.h * u / it.len);
+    }
+    return best;
+  };
+}
+
 function plantTrees(W, list) {
   for (const t of list) { t.item = addCircle(W.grid, t.x, t.z, 0.55 * t.s); t.item.tree = t; t.parts = []; t.fly = null; }
   const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3();
@@ -2549,13 +3062,13 @@ const MAP_PAL = {
     bg: '#8d9a86', land: [196, 190, 176], grass: [118, 168, 86], water: [92, 156, 208], rock: [150, 142, 128],
     building: '#8f877d', pad: '#bdb7ab', road: '#f7f4ea', major: '#fff1c2', ped: '#e3d3b6', wall: '#7a5f43',
     ramp: '#ffb703', coin: '#ffc83d', coinLine: '#12171c', car: '#d62f2f', carLine: '#ffffff', text: 'rgba(18,23,28,0.8)', bike: '#2f9a55',
-    outside: 'rgba(38,44,50,0.5)', limit: '#1f4f8f', nitro: '#1d8fff', route: '#7c3aed',
+    outside: 'rgba(38,44,50,0.5)', limit: '#1f4f8f', nitro: '#1d8fff', route: '#7c3aed', sport: '#b9cf9a',
   },
   retro: {
     bg: '#0b0217', land: [18, 7, 34], grass: [10, 38, 34], water: [8, 18, 60], rock: [44, 16, 66],
     building: '#2c1257', pad: '#1a0b33', road: '#ff2bd6', major: '#ff6ae4', ped: '#a44ad0', wall: '#29f3ff',
     ramp: '#ffe45c', coin: '#ffe45c', coinLine: '#0b0217', car: '#29f3ff', carLine: '#ffffff', text: 'rgba(41,243,255,0.85)', bike: '#39ff14',
-    outside: 'rgba(4,0,10,0.62)', limit: '#ffe45c', nitro: '#29f3ff', route: '#39ff14',
+    outside: 'rgba(4,0,10,0.62)', limit: '#ffe45c', nitro: '#29f3ff', route: '#39ff14', sport: '#0f4a40',
   },
 };
 // classify(x, z) renvoie « classe + nuance » : 0 ville, 1 verdure, 2 eau, 3 roche ; la partie décimale éclaircit
@@ -2950,7 +3463,7 @@ function buildRealWorld(id, D, cityStyle) {
   };
   W.rampAt = () => -Infinity;
   W.extraAt = null;   // bosses et tremplins du mode Chantiers
-  W.ground = (x, z) => Math.max(W.terrain(x, z), W.waterAt(x, z) - 0.9, W.extraAt ? W.extraAt(x, z) : -Infinity);
+  W.ground = (x, z) => Math.max(W.terrain(x, z), W.waterAt(x, z) - 0.9, W.extraAt ? W.extraAt(x, z) : -Infinity, W.parkAt ? W.parkAt(x, z) : -Infinity);
   const b = D.bounds;
   W.clamp = () => {
     const m = 4;
@@ -2966,6 +3479,7 @@ function buildRealWorld(id, D, cityStyle) {
     grass2: new THREE.Color(0x87b552), quay: new THREE.Color(0x7d776c), rock: new THREE.Color(0x857b6b),
   };
   const tmp = new THREE.Color();
+  poolBasins(W, D.sports);                                               // les piscines creusent (et buttent) le sol
   addTerrainMesh(W, cx, cz, sx, sz, sx > 3500 ? 8 : 6, (x, y, z, ny, c) => {
     const n = 0.5 + 0.5 * Math.sin(x * 0.11 + Math.sin(z * 0.07) * 2) * Math.cos(z * 0.09);
     c.copy(QC.pave).lerp(QC.pave2, n);
@@ -2974,7 +3488,7 @@ function buildRealWorld(id, D, cityStyle) {
     const wa = maskAt(x, z, 1);
     if (wa > 0) c.lerp(QC.quay, wa);
     c.lerp(QC.rock, smoothstep(0.82, 0.55, ny));
-  });
+  }, W.fineGround);
   // le fleuve : un grand plan ; les étangs et fontaines : leur forme exacte (cellules du masque + une de marge sous la rive)
   let riverDone = false;
   const ponds = acc();
@@ -3156,6 +3670,10 @@ function buildRealWorld(id, D, cityStyle) {
   addStatues(W, D.statues, batch.signs);                              // statues et monuments (plaque gravée au passage)
   batch.build(D.buildings.map((bd, i) => ({ ring: ringOf(bd.p), h: bd.h, l: bd.l, t: bd.t || bd.s || '', n: bd.n, rs: bd.rs, rc: bd.rc, shops: shopsBy.get(i) })));
 
+  addSports(W, D.sports);                                              // terrains, piscines, patinoires, jeux
+  const sportGrid = new Grid(40);
+  for (const r of W.sportRings || []) sportGrid.add(r, r.b[0], r.b[2], r.b[1], r.b[3]);
+
   // fortifications : on les ouvre là où une rue les traverse, avec un linteau de porte
   if (D.walls && D.walls.length) {
     const gateCenters = D.buildings.filter(bd => bd.t === 'p').map(bd => { const r = ringOf(bd.p); return [r.reduce((s, p) => s + p[0], 0) / r.length, r.reduce((s, p) => s + p[1], 0) / r.length]; });
@@ -3225,6 +3743,7 @@ function buildRealWorld(id, D, cityStyle) {
   for (let k = 0; k < D.trees.length; k += 2) {
     const x = D.trees[k], z = D.trees[k + 1], round = rand() < roundShare;
     if (W.bikeGrid.at(x, z).some(s => closestOnSeg(x, z, s)[0] < s.w / 2 + 0.9)) continue;   // pas d'arbre sur une piste cyclable
+    if (sportGrid.at(x, z).some(r => x >= r.b[0] - 1 && x <= r.b[1] + 1 && z >= r.b[2] - 1 && z <= r.b[3] + 1 && pointInRing(x, z, r.ring))) continue;   // ni sur un terrain
     trees.push({ x, z, y: W.terrain(x, z), s: rrange(0.85, 1.3), round, rot: rand() * Math.PI * 2, col: round ? roundColor() : pineColor() });
   }
   plantTrees(W, trees);
@@ -3243,6 +3762,12 @@ function buildRealWorld(id, D, cityStyle) {
     const v = mask[cellOf(x, z)];
     return (v === 1 ? 2 : v === 2 ? 1 : 0) + clamp((demAt(x, z) - 20) / 110, 0, 1) * 0.999;
   }, (g, P, pal, res) => {
+    for (const q of D.sports || []) {                                 // terrains de sport ; piscines en bleu
+      g.fillStyle = q.k === 'pool' ? `rgb(${pal.water.join(',')})` : pal.sport;
+      g.beginPath();
+      for (let k = 0; k < q.p.length; k += 2) { const [x, y] = P(q.p[k], q.p[k + 1]); if (k) g.lineTo(x, y); else g.moveTo(x, y); }
+      g.closePath(); g.fill();
+    }
     g.fillStyle = pal.building;
     for (const bd of D.buildings) {
       g.beginPath();
@@ -3887,7 +4412,7 @@ function propSound(type, vn) {
   if (clonkCd > 0) return;
   clonkCd = 0.07;
   const p = clamp(vn / 15, 0.2, 1);
-  if (type === 'fence') { sfxNoise(0.3, 0.3 * p, 'bandpass', 1700, 0, 3); sfxNoise(0.18, 0.2 * p, 'highpass', 4200, 0.04, 2); blip(210, 90, 0.2, 'triangle', 0.2 * p); }
+  if (type === 'fence' || type === 'chain' || type === 'goal' || type === 'hoop') { sfxNoise(0.3, 0.3 * p, 'bandpass', 1700, 0, 3); sfxNoise(0.18, 0.2 * p, 'highpass', 4200, 0.04, 2); blip(210, 90, 0.2, 'triangle', 0.2 * p); }
   else if (type === 'jersey') crashSound(vn * 0.8, 'wall');
   else { blip(320, 120, 0.14, 'triangle', 0.28 * p); sfxNoise(0.12, 0.22 * p, 'bandpass', 900, 0, 1.5); }
 }
@@ -5137,6 +5662,7 @@ function resetCrashes() {
   hazard.count = 0;
   crash = null;
   if (world.resetTrees) world.resetTrees();
+  if (world.sprops) for (const q of world.sprops) if (q.fly) { q.fly = null; q.item.off = false; setPropMatrix(q); }
   flyers.length = 0;
   if (world.cyc) for (const cy of world.cyc.cyclists) { cy.stop = 0; cy.wob = 0; cy.hitCd = 0; cy.fly = null; }
 }
@@ -6720,6 +7246,7 @@ function placeIndex(W) {
     for (const l of D.landmarks || []) add(l.n, 'lieu', l.x, l.z);
     for (const s of D.shops || []) add(s.n, 'commerce', s.x, s.z);
     for (const st of D.statues || []) add(st.n, 'monument', st.x, st.z);
+    for (const q of D.sports || []) add(q.n, 'sport', ...centroidOf(q.p));
     for (const a of D.areas || []) add(a.n, 'parc', ...centroidOf(a.p));
     for (const b of D.buildings) if (b.n) add(b.n, 'bâtiment', ...centroidOf(b.p));
     W.addrStreets = D.addr ? Object.keys(D.addr).map(n => ({ n, tok: tokensOf(n) })) : [];
