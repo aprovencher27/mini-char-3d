@@ -124,7 +124,7 @@
   #flash.on { animation: flash 0.6s ease-out; }
   @keyframes flash { 0% { opacity: 0.9; } 100% { opacity: 0; } }
   /* Garage */
-  .garage { margin: 0 0 18px; border-block: 2px solid var(--sign-white); padding: 8px 0; }
+  .garage { margin: 0; }
   .garage summary { display: flex; justify-content: space-between; align-items: center; cursor: pointer; font-size: 15px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; list-style: none; }
   .garage summary::-webkit-details-marker { display: none; }
   .garage summary::before { content: '▸'; margin-right: 8px; }
@@ -221,7 +221,7 @@
     flex: 1 1 240px; min-width: 0; padding: 8px 11px; border-radius: 8px; border: 2px solid var(--sign-white);
     background: var(--sign-white); color: var(--ink); font: 600 15px var(--font-ui); user-select: text; -webkit-user-select: text;
   }
-  .goto-note { margin: 0 0 12px; }
+  .fine.goto-note { margin: 0 0 12px; }
   body.retro .goto-row label { font-family: var(--font-display); font-size: 9px; }
   body.retro #goto-input { background: var(--sign-green); color: var(--sign-white); font-size: 18px; }
   /* GPS : prochaine manœuvre, sous le panneau de rue */
@@ -246,6 +246,36 @@
   body.retro .voice-row label { font-family: var(--font-display); font-size: 9px; }
   body.retro #voice-select { font-size: 18px; }
   .opt { border: 0; margin: 0; padding: 0; min-width: 0; }
+  /* écran de départ : trois grandes cartes */
+  .maps { margin: 0 0 18px; }
+  .map-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .map-cards label { position: relative; display: block; }
+  .map-cards input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+  .map-cards span {
+    display: flex; flex-direction: column; justify-content: center; gap: 4px; height: 100%; min-height: 84px; padding: 10px 12px;
+    border-radius: 10px; border: 2px solid var(--sign-white); line-height: 1.1;
+  }
+  .map-cards strong { font-size: 17px; }
+  .map-cards small { font-size: 13px; opacity: 0.85; }
+  .map-cards input:checked + span { background: var(--sign-white); color: var(--sign-green); }
+  .map-cards input:focus-visible + span { outline: 3px solid var(--coin); outline-offset: 2px; }
+  .map-cards input:disabled + span { opacity: 0.4; }
+  /* options avancées : onglets */
+  .adv-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 0 0 12px; }
+  .adv-head h2 { margin: 0; font-family: var(--font-display); font-weight: 400; font-size: clamp(22px, 5vw, 30px); line-height: 1; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 14px; border-bottom: 2px solid var(--sign-white); padding-bottom: 10px; }
+  .tab {
+    padding: 7px 12px; border-radius: 8px; border: 2px solid var(--sign-white); background: transparent; color: var(--sign-white);
+    font-size: 14px; font-weight: 700; cursor: pointer;
+  }
+  .tab[aria-selected="true"] { background: var(--sign-white); color: var(--sign-green); }
+  .tabpane { min-height: 200px; }
+  .options.two { grid-template-columns: repeat(2, 1fr); margin: 0 0 12px; }
+  .garage-top { display: flex; justify-content: space-between; margin: 0 0 4px; font-size: 15px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+  body.retro .map-cards strong, body.retro .tab, body.retro .garage-top { font-family: var(--font-display); font-size: 9px; line-height: 1.5; }
+  body.retro .map-cards small { font-size: 17px; }
+  body.retro .adv-head h2 { font-family: "Monoton", var(--font-display); color: var(--coin); }
+  @media (max-width: 600px) { .map-cards { grid-template-columns: 1fr; } .map-cards span { min-height: 58px; } .options.two { grid-template-columns: 1fr; } }
   .opt.wide { grid-column: 1 / -1; }
   .opt legend { padding: 0; margin: 0 0 6px; font-size: 12px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; opacity: 0.85; }
   .seg { display: grid; grid-template-columns: repeat(var(--n, 2), 1fr); gap: 6px; }
@@ -281,6 +311,7 @@
   .btn:disabled { opacity: 0.55; cursor: progress; }
   .btn.ghost { background: transparent; color: var(--sign-white); box-shadow: inset 0 0 0 2px var(--sign-white); }
   .fine { margin: 0; font-size: 14px; opacity: 0.85; }
+  .actions + .fine { margin-top: 12px; }
   .win-time { margin: 4px 0 8px; font-family: var(--font-display); font-size: clamp(34px, 9vw, 52px); line-height: 1; color: var(--coin); }
 
   /* ---------- Tactile ---------- */
@@ -420,89 +451,118 @@
 </div>
 
 <div id="menu" class="overlay">
-  <section class="sign-panel" aria-labelledby="menu-title">
+  <!-- Écran de départ : seulement la carte -->
+  <section class="sign-panel" id="menu-main" aria-labelledby="menu-title">
     <p class="eyebrow" id="menu-eyebrow">Départ · Centre-ville</p>
     <h1 id="menu-title">Mini Char 3D</h1>
-    <p class="lede">Prends le volant d'une petite voiture et ramasse les <strong id="menu-count">32 pièces d'or</strong> le plus vite possible. Les bonbonnes bleues donnent du nitro, et les touristes qui font signe veulent un taxi : arrête-toi à côté d'eux. Attention aux cyclistes et aux piétons !</p>
-    <div class="options">
-      <fieldset class="opt wide">
-        <legend>Carte</legend>
-        <div class="seg" style="--n: 3">
-          <label><input type="radio" name="map" value="invente" id="map-invente"><span>Monde inventé</span></label>
-          <label><input type="radio" name="map" value="quebec" id="map-quebec"><span>Vieux-Québec</span></label>
-          <label><input type="radio" name="map" value="plateau" id="map-plateau"><span>Plateau Mont-Royal</span></label>
-        </div>
-      </fieldset>
-      <fieldset class="opt">
-        <legend>Graphismes</legend>
-        <div class="seg">
-          <label><input type="radio" name="style" value="moderne" id="style-moderne"><span>Moderne</span></label>
-          <label><input type="radio" name="style" value="retro" id="style-retro"><span>Années 80</span></label>
-        </div>
-      </fieldset>
-      <fieldset class="opt">
-        <legend>Mode</legend>
-        <div class="seg">
-          <label><input type="radio" name="mode" value="classique" id="mode-classique"><span>Classique</span></label>
-          <label><input type="radio" name="mode" value="chantier" id="mode-chantier"><span>Chantiers</span></label>
-        </div>
-      </fieldset>
-      <fieldset class="opt">
-        <legend>Départ</legend>
-        <div class="seg">
-          <label><input type="radio" name="start" value="hasard" id="start-hasard"><span>Au hasard</span></label>
-          <label><input type="radio" name="start" value="fixe" id="start-fixe"><span>Point fixe</span></label>
-        </div>
-      </fieldset>
-      <fieldset class="opt">
-        <legend>Voix des rues</legend>
-        <div class="seg">
-          <label><input type="radio" name="voice" value="on" id="voice-on"><span>Oui</span></label>
-          <label><input type="radio" name="voice" value="off" id="voice-off"><span>Non</span></label>
-        </div>
-      </fieldset>
-    </div>
-    <div class="goto-row">
-      <label for="goto-input">Aller à</label>
-      <input id="goto-input" list="goto-list" type="text" placeholder="4200 rue Saint-Denis, Schwartz's, Château Frontenac…" autocomplete="off" spellcheck="false">
-      <button id="goto-nav" class="chip" type="button">Itinéraire GPS</button>
-      <button id="goto-tp" class="chip" type="button">Téléporter</button>
-      <datalist id="goto-list"></datalist>
-    </div>
-    <p class="fine goto-note" id="goto-note">Tape une adresse ou un lieu : le GPS t'y guide à la voix (flèches sur la chaussée, tracé sur la carte).</p>
-    <div class="voice-row">
-      <label for="voice-select">Voix</label>
-      <select id="voice-select"></select>
-      <button id="voice-test" class="chip" type="button">Écouter</button>
-    </div>
-    <p class="fine voice-note" id="voice-note"></p>
-    <div class="route" id="menu-route"></div>
-    <p class="map-note" id="map-note"></p>
-    <dl class="controls">
-      <dt><kbd>Z</kbd><kbd>↑</kbd></dt><dd>Accélérer</dd>
-      <dt><kbd>C</kbd></dt><dd>Caméra</dd>
-      <dt><kbd>S</kbd><kbd>↓</kbd></dt><dd>Freiner, reculer</dd>
-      <dt><kbd>G</kbd></dt><dd>Graphismes</dd>
-      <dt><kbd>Q</kbd><kbd>D</kbd></dt><dd>Tourner</dd>
-      <dt><kbd>R</kbd></dt><dd>Replacer</dd>
-      <dt><kbd>Espace</kbd></dt><dd>Drift</dd>
-      <dt><kbd>M</kbd></dt><dd>Son</dd>
-      <dt><kbd>V</kbd></dt><dd>Voix des rues</dd>
-      <dt><kbd>Échap</kbd></dt><dd>Menu</dd>
-      <dt><kbd>N</kbd><kbd>Maj</kbd></dt><dd>Nitro</dd>
-      <dt><kbd>T</kbd></dt><dd>Aller à une adresse</dd>
-      <dt><kbd>H</kbd></dt><dd>Klaxon</dd>
-    </dl>
-    <p class="touch-help">◀ ▶ pour tourner, ▲ pour accélérer, ▼ pour freiner et reculer, <strong>Drift</strong> pour le frein à main, <strong>N₂O</strong> pour le nitro, <strong>Klax</strong> pour klaxonner. La carte en haut à droite montre les pièces restantes.</p>
-    <details class="garage" id="garage">
-      <summary><span>Garage</span><span class="garage-cash" id="garage-cash">0 $</span></summary>
-      <p class="fine">Ramasse les billets de 20 $ et les pièces, fais des sauts et des courses de taxi pour t'acheter d'autres chars. Attention aux photo-radars : 50 km/h.</p>
-      <div class="cars" id="cars"></div>
-    </details>
+    <p class="lede">Ramasse les <strong id="menu-count">32 pièces d'or</strong> le plus vite possible.</p>
+    <fieldset class="opt maps">
+      <legend>Carte</legend>
+      <div class="map-cards">
+        <label><input type="radio" name="map" value="invente" id="map-invente"><span><strong>Monde inventé</strong><small>Tremplins, collines et lacs</small></span></label>
+        <label><input type="radio" name="map" value="quebec" id="map-quebec"><span><strong>Vieux-Québec</strong><small>Jusqu'à Montcalm et aux plaines</small></span></label>
+        <label><input type="radio" name="map" value="plateau" id="map-plateau"><span><strong>Plateau-Mont-Royal</strong><small>Tout l'arrondissement</small></span></label>
+      </div>
+    </fieldset>
     <div class="actions">
       <button id="btn-start" class="btn" type="button">Démarrer</button>
       <button id="btn-new" class="btn ghost" type="button" hidden>Nouvelle partie</button>
-      <p class="fine" id="menu-note"></p>
+      <button id="btn-adv" class="btn ghost" type="button">Options avancées</button>
+    </div>
+    <p class="fine" id="menu-note"></p>
+  </section>
+
+  <!-- Options avancées : partie, garage, affichage et son, commandes -->
+  <section class="sign-panel" id="menu-adv" aria-labelledby="adv-title" hidden>
+    <div class="adv-head">
+      <h2 id="adv-title">Options avancées</h2>
+      <button id="btn-back" class="chip" type="button">← Retour</button>
+    </div>
+    <div class="tabs" role="tablist">
+      <button class="tab" type="button" role="tab" data-tab="partie" aria-selected="true">Partie</button>
+      <button class="tab" type="button" role="tab" data-tab="garage" aria-selected="false">Garage</button>
+      <button class="tab" type="button" role="tab" data-tab="affichage" aria-selected="false">Affichage et son</button>
+      <button class="tab" type="button" role="tab" data-tab="commandes" aria-selected="false">Commandes</button>
+    </div>
+
+    <div class="tabpane" data-pane="partie" role="tabpanel">
+      <div class="options two">
+        <fieldset class="opt">
+          <legend>Mode</legend>
+          <div class="seg">
+            <label><input type="radio" name="mode" value="chantier" id="mode-chantier"><span>Chantiers</span></label>
+            <label><input type="radio" name="mode" value="classique" id="mode-classique"><span>Classique</span></label>
+          </div>
+        </fieldset>
+        <fieldset class="opt">
+          <legend>Départ</legend>
+          <div class="seg">
+            <label><input type="radio" name="start" value="hasard" id="start-hasard"><span>Au hasard</span></label>
+            <label><input type="radio" name="start" value="fixe" id="start-fixe"><span>Point fixe</span></label>
+          </div>
+        </fieldset>
+      </div>
+      <div class="goto-row">
+        <label for="goto-input">Aller à</label>
+        <input id="goto-input" list="goto-list" type="text" placeholder="4200 rue Saint-Denis, Schwartz's, Château Frontenac…" autocomplete="off" spellcheck="false">
+        <button id="goto-nav" class="chip" type="button">Itinéraire GPS</button>
+        <button id="goto-tp" class="chip" type="button">Téléporter</button>
+        <datalist id="goto-list"></datalist>
+      </div>
+      <p class="fine goto-note" id="goto-note">Tape une adresse ou un lieu : le GPS t'y guide à la voix (flèches sur la chaussée, tracé sur la carte).</p>
+      <div class="route" id="menu-route"></div>
+      <p class="map-note" id="map-note"></p>
+      <p class="fine">Les bonbonnes bleues donnent du nitro, et les touristes qui font signe veulent un taxi : arrête-toi à côté d'eux. Attention aux cyclistes et aux piétons !</p>
+    </div>
+
+    <div class="tabpane garage" data-pane="garage" id="garage" role="tabpanel" hidden>
+      <p class="garage-top"><span>Ton argent</span><span class="garage-cash" id="garage-cash">0 $</span></p>
+      <p class="fine">Ramasse les billets de 20 $ et les pièces, fais des sauts et des courses de taxi pour t'acheter d'autres chars. Attention aux photo-radars : 50 km/h.</p>
+      <div class="cars" id="cars"></div>
+    </div>
+
+    <div class="tabpane" data-pane="affichage" role="tabpanel" hidden>
+      <div class="options two">
+        <fieldset class="opt">
+          <legend>Graphismes</legend>
+          <div class="seg">
+            <label><input type="radio" name="style" value="moderne" id="style-moderne"><span>Moderne</span></label>
+            <label><input type="radio" name="style" value="retro" id="style-retro"><span>Années 80</span></label>
+          </div>
+        </fieldset>
+        <fieldset class="opt">
+          <legend>Voix des rues</legend>
+          <div class="seg">
+            <label><input type="radio" name="voice" value="on" id="voice-on"><span>Oui</span></label>
+            <label><input type="radio" name="voice" value="off" id="voice-off"><span>Non</span></label>
+          </div>
+        </fieldset>
+      </div>
+      <div class="voice-row">
+        <label for="voice-select">Voix</label>
+        <select id="voice-select"></select>
+        <button id="voice-test" class="chip" type="button">Écouter</button>
+      </div>
+      <p class="fine voice-note" id="voice-note"></p>
+    </div>
+
+    <div class="tabpane" data-pane="commandes" role="tabpanel" hidden>
+      <dl class="controls">
+        <dt><kbd>Z</kbd><kbd>↑</kbd></dt><dd>Accélérer</dd>
+        <dt><kbd>C</kbd></dt><dd>Caméra</dd>
+        <dt><kbd>S</kbd><kbd>↓</kbd></dt><dd>Freiner, reculer</dd>
+        <dt><kbd>G</kbd></dt><dd>Graphismes</dd>
+        <dt><kbd>Q</kbd><kbd>D</kbd></dt><dd>Tourner</dd>
+        <dt><kbd>R</kbd></dt><dd>Replacer</dd>
+        <dt><kbd>Espace</kbd></dt><dd>Drift</dd>
+        <dt><kbd>M</kbd></dt><dd>Son</dd>
+        <dt><kbd>V</kbd></dt><dd>Voix des rues</dd>
+        <dt><kbd>Échap</kbd></dt><dd>Menu</dd>
+        <dt><kbd>N</kbd><kbd>Maj</kbd></dt><dd>Nitro</dd>
+        <dt><kbd>T</kbd></dt><dd>Aller à une adresse</dd>
+        <dt><kbd>H</kbd></dt><dd>Klaxon</dd>
+      </dl>
+      <p class="touch-help">◀ ▶ pour tourner, ▲ pour accélérer, ▼ pour freiner et reculer, <strong>Drift</strong> pour le frein à main, <strong>N₂O</strong> pour le nitro, <strong>Klax</strong> pour klaxonner. La carte en haut à droite montre les pièces restantes.</p>
     </div>
   </section>
 </div>
@@ -6058,7 +6118,7 @@ const MODE_NOTE = 'Mode Chantiers : des cônes orange, des clôtures et des barr
 
 let state = 'menu';             // menu | play | won
 let gameActive = false;         // une partie est en cours (menu = pause)
-let mode = 'classique';         // classique | chantier
+let mode = 'chantier';          // chantier (par défaut) | classique
 let elapsed = 0, collected = 0, camMode = 0;
 const recordKey = () => world.id + (world.id === 'plateau' ? '-arrondissement' : '') + (mode === 'chantier' ? '-chantier' : '');
 const bestOf = key => { const v = parseFloat(store.get('best-' + key) ?? (key === 'invente' ? store.get('best') : null)); return v > 0 ? v : null; };
@@ -6081,7 +6141,8 @@ function refreshMenu() {
   el.menuNote.textContent = best != null ? `Record sur cette carte${mode === 'chantier' ? ' en mode Chantiers' : ''} : ${fmt(best)}.` : 'Appuie sur Entrée pour démarrer.';
   el.start.textContent = gameActive ? 'Reprendre' : 'Démarrer';
   el.newGame.hidden = !gameActive;
-  renderGarage();
+  if (!$('menu-adv').hidden && !$('garage').hidden) renderGarage();
+  setText($('garage-cash'), fmtCash(cash));
   $('map-' + world.id).checked = true;
   $('style-' + style).checked = true;
   $('mode-' + mode).checked = true;
@@ -6157,7 +6218,7 @@ function openMenu() {
   if (synth) synth.cancel();
   refreshMenu();
   el.menu.hidden = false;
-  setTimeout(() => el.start.focus({ preventScroll: true }), 30);
+  showMain();
 }
 const spotBlocked = (qx, qz) => world.rampAt(qx, qz) > -Infinity || (world.extraAt && world.extraAt(qx, qz) > -Infinity) ||
   (world.siteOn && world.site.grid.at(qx, qz).some(it => !it.off && (it.seg ? closestOnSeg(qx, qz, it)[0] : Math.hypot(qx - it.x, qz - it.z)) < it.r + 2.2)) ||
@@ -6283,7 +6344,7 @@ function setSite(W, on) {
 function setMode(m) {
   if (m === mode) return;
   mode = m;
-  store.set('mode', m);
+  store.set('mode-v2', m);
   $('mode-' + m).checked = true;
   if (!world) return;
   setSite(world, mode === 'chantier');
@@ -6325,11 +6386,12 @@ addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
   if (e.target && e.target.id === 'goto-input') {                    // on tape une adresse
     if (e.code === 'Enter') { e.preventDefault(); gotoPlace('nav'); }
-    else if (e.code === 'Escape' && gameActive) play();
+    else if (e.code === 'Escape') showMain();
     return;
   }
   if (state === 'menu') {
     if (e.code === 'Enter' && e.target.tagName !== 'BUTTON') { e.preventDefault(); startOrResume(); }
+    else if (e.code === 'Escape' && !$('menu-adv').hidden) showMain();
     else if (e.code === 'Escape' && gameActive) play();
     else if (k === 'g' && !e.repeat) setStyle(style === 'retro' ? 'moderne' : 'retro');
     return;
@@ -6346,7 +6408,7 @@ addEventListener('keydown', e => {
   else if (k === 'm') toggleMute();
   else if (k === 'v') setVoice(!voiceOn, true);
   else if (k === 'n' || e.code === 'ShiftLeft' || e.code === 'ShiftRight') fireNitro();
-  else if (k === 't') { e.preventDefault(); openMenu(); setTimeout(() => $('goto-input').focus(), 60); }
+  else if (k === 't') { e.preventDefault(); openMenu(); showAdv('partie'); setTimeout(() => $('goto-input').focus(), 60); }
   else if (k === 'h') honk();
 });
 addEventListener('keyup', e => keys.delete(e.code));
@@ -6354,6 +6416,25 @@ addEventListener('blur', () => keys.clear());
 
 const onButton = (id, fn) => $(id).addEventListener('click', e => { fn(); e.currentTarget.blur(); });
 onButton('btn-start', startOrResume);
+function showAdv(tab) {
+  $('menu-main').hidden = true;
+  $('menu-adv').hidden = false;
+  if (tab) selectTab(tab);
+  setTimeout(() => $('btn-back').focus({ preventScroll: true }), 30);
+}
+function showMain() {
+  $('menu-adv').hidden = true;
+  $('menu-main').hidden = false;
+  setTimeout(() => el.start.focus({ preventScroll: true }), 30);
+}
+function selectTab(name) {
+  document.querySelectorAll('.tab').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === name)));
+  document.querySelectorAll('.tabpane').forEach(pn => { pn.hidden = pn.dataset.pane !== name; });
+  if (name === 'garage') renderGarage();
+}
+document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => selectTab(b.dataset.tab)));
+onButton('btn-adv', () => showAdv());
+onButton('btn-back', showMain);
 onButton('btn-new', newGame);
 onButton('btn-again', newGame);
 onButton('btn-free', () => { el.win.hidden = true; canvas.focus({ preventScroll: true }); });
@@ -6369,7 +6450,7 @@ document.querySelectorAll('input[name="voice"]').forEach(r => r.addEventListener
 document.querySelectorAll('input[name="start"]').forEach(r => r.addEventListener('change', () => { startMode = r.value; store.set('start', r.value); refreshMenu(); }));
 onButton('goto-nav', () => gotoPlace('nav'));
 onButton('goto-tp', () => gotoPlace('tp'));
-onButton('btn-goto', () => { openMenu(); setTimeout(() => $('goto-input').focus(), 60); });
+onButton('btn-goto', () => { openMenu(); showAdv('partie'); setTimeout(() => $('goto-input').focus(), 60); });
 
 const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
 document.body.classList.toggle('touch', isTouch);
@@ -6895,7 +6976,7 @@ addEventListener('resize', resize);
 // =====================================================================
 const hash = location.hash.toLowerCase();
 style = hash.includes('retro') || hash.includes('80') ? 'retro' : hash.includes('moderne') ? 'moderne' : (store.get('style') === 'retro' ? 'retro' : 'moderne');
-mode = hash.includes('chantier') ? 'chantier' : hash.includes('classique') ? 'classique' : (store.get('mode') === 'chantier' ? 'chantier' : 'classique');
+mode = hash.includes('chantier') ? 'chantier' : hash.includes('classique') ? 'classique' : (store.get('mode-v2') === 'classique' ? 'classique' : 'chantier');   // Chantiers par défaut
 const initialWorld = hash.includes('plateau') ? 'plateau' : hash.includes('quebec') ? 'quebec' : hash.includes('invente') ? 'invente' : (store.get('map') || 'invente');
 
 const hot = window.claude?.hot;
