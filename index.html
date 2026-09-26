@@ -799,7 +799,8 @@ const FACADE_DEFS = [
   { type: 'glass', base: [70, 90, 106] },                                                                        // mur-rideau
 ];
 const FAC = { brickRed: 0, brickBrown: 1, brickBeige: 2, greystone: 3, stoneQc: 4, stucco: 5, painted: 6, glass: 7 };
-const M_SHOP = 8, M_DOOR = 9, M_ROOF_FLAT = 10, M_ROOF_METAL = 11, M_TRIM = 12, M_RAIL = 13, M_STONE = 14, N_CITY_MATS = 15;
+const M_SHOP = 8, M_DOOR = 9, M_ROOF_FLAT = 10, M_ROOF_METAL = 11, M_TRIM = 12, M_RAIL = 13, M_STONE = 14;
+const M_CHURCH = 15, M_TOWER = 16, M_SCHOOL_R = 17, M_SCHOOL_B = 18, M_DECAL = 19, N_CITY_MATS = 20;   // églises, clochers, écoles, détails (rosace, portails, drapeau)
 const BAY = 3.2;
 const FACADE_AVG = FACADE_DEFS.map(d => new THREE.Color().setRGB(d.base[0] / 255, d.base[1] / 255, d.base[2] / 255, THREE.SRGBColorSpace));
 const jitter = (rgb, amt) => { const d = (Math.random() * 2 - 1) * amt; return `rgb(${clamp(rgb[0] + d, 0, 255) | 0},${clamp(rgb[1] + d * 0.9, 0, 255) | 0},${clamp(rgb[2] + d * 0.8, 0, 255) | 0})`; };
@@ -854,6 +855,139 @@ const facadeTex = FACADE_DEFS.map(d => makeTexture(512, (g, S) => {
   drawMasonry(g, S, d);
   for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) drawWindow(g, i * 128, j * 128, d);
 }));
+// ---------- Églises, écoles : textures dédiées ----------
+// ogive (arc brisé équilatéral) : rectangle surmonté de deux arcs de rayon w
+function lancetPath(g, x, y, w, h) {
+  const ys = y + w * 0.866;
+  g.beginPath();
+  g.moveTo(x, y + h); g.lineTo(x, ys);
+  g.arc(x + w, ys, w, Math.PI, Math.PI * 4 / 3);
+  g.arc(x, ys, w, -Math.PI / 3, 0);
+  g.lineTo(x + w, y + h); g.closePath();
+}
+// vitrail : losanges colorés sertis de plomb
+function drawStained(g, x, y, w, h) {
+  const cols = ['#27408f', '#8f1d2c', '#c79a2e', '#2a6b4a', '#5a2a86', '#1f5f9e', '#27408f', '#b8452a'];
+  g.fillStyle = '#1b2350'; g.fillRect(x, y, w, h);
+  const d = 16;
+  for (let j = -1; j <= h / (d / 2) + 1; j++) for (let i = -1; i <= w / d + 1; i++) {
+    const cx = x + i * d + (j % 2 ? d / 2 : 0), cy = y + j * d / 2;
+    g.fillStyle = cols[Math.floor(Math.random() * cols.length)];
+    g.beginPath(); g.moveTo(cx, cy - d / 2); g.lineTo(cx + d / 2, cy); g.lineTo(cx, cy + d / 2); g.lineTo(cx - d / 2, cy); g.closePath(); g.fill();
+  }
+  g.strokeStyle = 'rgba(12,12,16,0.8)'; g.lineWidth = 1.6;
+  for (let k = -h; k < w + h; k += d) { g.beginPath(); g.moveTo(x + k, y); g.lineTo(x + k + h, y + h); g.moveTo(x + k, y + h); g.lineTo(x + k + h, y); g.stroke(); }
+  g.fillStyle = 'rgba(255,255,255,0.08)'; g.fillRect(x, y, w * 0.35, h);
+}
+function drawAshlar(g, W, H, base, bw = 64, bh = 32) {
+  g.fillStyle = '#7d7a73'; g.fillRect(0, 0, W, H);
+  for (let r = 0; r < H / bh; r++) for (let c = -1; c <= W / bw; c++) { g.fillStyle = jitter(base, 12); g.fillRect(c * bw + (r % 2) * bw / 2 + 1.5, r * bh + 1.5, bw - 3, bh - 3); }
+  noise(g, W, H, 9000, 0.05);
+}
+const STONE_QC = [168, 163, 153];
+// murs de la nef : contreforts et une grande verrière en ogive par travée (2 travées par texture, toute la hauteur)
+const churchWallTex = makeTexture(512, (g, W, H) => {
+  drawAshlar(g, W, H, STONE_QC);
+  for (let b = 0; b < 2; b++) {
+    const x0 = b * 256;
+    g.fillStyle = 'rgba(255,255,255,0.13)'; g.fillRect(x0, 0, 24, H);
+    g.fillStyle = 'rgba(0,0,0,0.16)'; g.fillRect(x0 + 24, 0, 5, H);
+    const w = 118, x = x0 + 128 - w / 2 + 12, top = 190, bot = 860;
+    g.fillStyle = '#cfcabe'; lancetPath(g, x - 12, top - 12, w + 24, bot - top + 24); g.fill();
+    g.save(); lancetPath(g, x, top, w, bot - top); g.clip(); drawStained(g, x, top, w, bot - top); g.restore();
+    g.fillStyle = '#bdb8ac';
+    g.fillRect(x + w / 2 - 4, top + w * 0.75, 8, bot - top - w * 0.75);          // meneau
+    g.beginPath(); g.arc(x + w / 2, top + w * 0.52, 17, 0, Math.PI * 2); g.lineWidth = 7; g.strokeStyle = '#bdb8ac'; g.stroke();
+    g.fillStyle = '#d6d1c5'; g.fillRect(x - 18, bot + 8, w + 36, 14);             // appui
+  }
+  g.fillStyle = '#8c8880'; g.fillRect(0, 0, W, 34); g.fillStyle = '#c2bdb1'; g.fillRect(0, 34, W, 8);   // corniche
+  g.fillStyle = '#86827a'; g.fillRect(0, H - 90, W, 90); g.fillStyle = '#b3aea3'; g.fillRect(0, H - 96, W, 7);  // soubassement
+}, 1024);
+// clocher : pierre de taille, bandeaux, étroites fenêtres en ogive (4 × 4 cases comme les façades)
+const churchTowerTex = makeTexture(512, (g, W, H) => {
+  drawAshlar(g, W, H, STONE_QC, 48, 24);
+  for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) {
+    const x0 = i * 128, y0 = j * 128;
+    g.fillStyle = '#c4bfb3'; g.fillRect(x0, y0 + 118, 128, 10);
+    if (Math.random() < 0.5) {
+      const w = 30, x = x0 + 64 - w / 2, top = y0 + 22, bot = y0 + 104;
+      g.fillStyle = '#cfcabe'; lancetPath(g, x - 7, top - 7, w + 14, bot - top + 14); g.fill();
+      g.save(); lancetPath(g, x, top, w, bot - top); g.clip(); g.fillStyle = '#20283a'; g.fillRect(x, top, w, bot - top); g.restore();
+    }
+  }
+});
+// écoles : brique, grandes fenêtres à carreaux avec imposte, bandeaux de pierre à chaque étage
+const schoolTex = (base, mortar) => makeTexture(512, (g, S) => {
+  drawMasonry(g, S, { type: 'brick', base, mortar });
+  for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) {
+    const x0 = i * 128, y0 = j * 128;
+    g.fillStyle = '#dcd3c2'; g.fillRect(x0, y0 + 12, 128, 11); g.fillRect(x0 + 6, y0 + 110, 116, 8);
+    const wx = x0 + 11, wy = y0 + 25, ww = 106, wh = 84;
+    g.fillStyle = '#f2efe6'; g.fillRect(wx, wy, ww, wh);
+    const gx = wx + 4, gy = wy + 4, gw = ww - 8, gh = wh - 8;
+    const grad = g.createLinearGradient(gx, gy, gx + gw, gy + gh);
+    grad.addColorStop(0, '#71879b'); grad.addColorStop(0.5, '#314150'); grad.addColorStop(1, '#4b5f70');
+    g.fillStyle = grad; g.fillRect(gx, gy, gw, gh);
+    if (Math.random() < 0.12) { g.fillStyle = 'rgba(240,214,160,0.55)'; g.fillRect(gx, gy + gh * 0.3, gw, gh * 0.7); }
+    g.fillStyle = '#f2efe6';
+    g.fillRect(gx, gy + gh * 0.28 - 2, gw, 4);                                    // imposte
+    g.fillRect(gx, gy + gh * 0.64 - 1.5, gw, 3);
+    for (const f of [1 / 3, 2 / 3]) g.fillRect(gx + gw * f - 1.5, gy, 3, gh);
+    for (const f of [1 / 6, 1 / 2, 5 / 6]) g.fillRect(gx + gw * f - 1, gy, 2, gh * 0.28);
+    g.fillStyle = 'rgba(255,255,255,0.1)';
+    g.beginPath(); g.moveTo(gx, gy + gh * 0.7); g.lineTo(gx + gw * 0.5, gy); g.lineTo(gx + gw * 0.7, gy); g.lineTo(gx, gy + gh); g.fill();
+  }
+});
+const schoolRedTex = schoolTex([146, 60, 42], '#b5a693'), schoolBeigeTex = schoolTex([196, 162, 112], '#e2d6c2');
+// planche de détails : rosace, portail d'église, drapeau du Québec, porte d'école (fond transparent)
+const DECAL = { rose: [0, 0, 512, 512], portal: [512, 0, 768, 512], flag: [768, 0, 1024, 172], door: [768, 180, 1024, 512] };
+for (const k in DECAL) { const [x0, y0, x1, y1] = DECAL[k]; DECAL[k] = [x0 / 1024, 1 - y1 / 512, x1 / 1024, 1 - y0 / 512]; }
+const decalTex = makeTexture(1024, (g, W, H) => {
+  g.clearRect(0, 0, W, H);
+  // rosace : anneau de pierre, pétales de verre coloré, remplages
+  const cx = 256, cy = 256;
+  g.fillStyle = '#c9c3b6'; g.beginPath(); g.arc(cx, cy, 250, 0, Math.PI * 2); g.fill();
+  g.save(); g.beginPath(); g.arc(cx, cy, 222, 0, Math.PI * 2); g.clip(); drawStained(g, 30, 30, 452, 452); g.restore();
+  g.strokeStyle = '#c9c3b6'; g.lineWidth = 12;
+  for (let k = 0; k < 12; k++) {
+    const a = (k / 12) * Math.PI * 2;
+    g.beginPath(); g.moveTo(cx + Math.cos(a) * 60, cy + Math.sin(a) * 60); g.lineTo(cx + Math.cos(a) * 222, cy + Math.sin(a) * 222); g.stroke();
+    g.beginPath(); g.arc(cx + Math.cos(a + Math.PI / 12) * 170, cy + Math.sin(a + Math.PI / 12) * 170, 34, 0, Math.PI * 2); g.lineWidth = 8; g.stroke(); g.lineWidth = 12;
+  }
+  g.beginPath(); g.arc(cx, cy, 60, 0, Math.PI * 2); g.stroke();
+  g.beginPath(); g.arc(cx, cy, 128, 0, Math.PI * 2); g.lineWidth = 9; g.stroke();
+  // portail en ogive : voussures de pierre, double porte de bois clouté, tympan
+  g.fillStyle = '#c9c3b6'; lancetPath(g, 528, 16, 224, 496); g.fill();
+  g.fillStyle = '#b0aa9d'; lancetPath(g, 544, 34, 192, 478); g.fill();
+  g.fillStyle = '#3a3550'; lancetPath(g, 562, 52, 156, 460); g.fill();
+  g.fillStyle = '#c9c3b6'; g.fillRect(562, 200, 156, 12);
+  g.fillStyle = '#4a2c1a'; g.fillRect(566, 212, 148, 300);
+  g.fillStyle = 'rgba(0,0,0,0.35)'; for (let x = 566; x < 714; x += 18) g.fillRect(x, 212, 2, 300);
+  g.fillStyle = '#1d1a18'; g.fillRect(638, 212, 4, 300);
+  for (const y of [250, 350, 450]) { g.fillStyle = '#2a2622'; g.fillRect(570, y, 64, 7); g.fillRect(646, y, 64, 7); }
+  g.fillStyle = '#e9e2c9'; g.fillRect(637, 110, 6, 60); g.fillRect(622, 128, 36, 6);   // croix du tympan
+  // drapeau du Québec : fond bleu, croix blanche, quatre fleurs de lis
+  const fx = 768, fy = 0, fw = 256, fh = 172;
+  g.fillStyle = '#0b4ea2'; g.fillRect(fx, fy, fw, fh);
+  g.fillStyle = '#ffffff'; g.fillRect(fx + fw / 2 - 11, fy, 22, fh); g.fillRect(fx, fy + fh / 2 - 11, fw, 22);
+  const lis = (x, y, s) => {
+    g.beginPath(); g.ellipse(x, y - s * 0.35, s * 0.18, s * 0.5, 0, 0, Math.PI * 2); g.fill();
+    for (const sg of [-1, 1]) { g.beginPath(); g.ellipse(x + sg * s * 0.38, y - s * 0.12, s * 0.14, s * 0.36, sg * 0.7, 0, Math.PI * 2); g.fill(); }
+    g.fillRect(x - s * 0.45, y + s * 0.08, s * 0.9, s * 0.14);
+    g.beginPath(); g.moveTo(x - s * 0.16, y + s * 0.22); g.lineTo(x + s * 0.16, y + s * 0.22); g.lineTo(x, y + s * 0.55); g.fill();
+  };
+  for (const [qx, qy] of [[0.25, 0.25], [0.75, 0.25], [0.25, 0.75], [0.75, 0.75]]) lis(fx + fw * qx, fy + fh * qy, 44);
+  // porte d'école : double porte vitrée, imposte, encadrement de pierre
+  g.fillStyle = '#cfc6b4'; g.fillRect(768, 180, 256, 332);
+  g.fillStyle = '#23392f'; g.fillRect(792, 204, 208, 308);
+  g.fillStyle = '#5e7384'; g.fillRect(804, 214, 184, 64);
+  g.fillStyle = '#23392f'; for (const x of [848, 894, 940]) g.fillRect(x, 214, 5, 64);
+  for (const x of [808, 902]) { g.fillStyle = '#5e7384'; g.fillRect(x + 8, 298, 70, 120); g.fillStyle = '#c9a24a'; g.fillRect(x + (x === 808 ? 76 : 2), 430, 6, 18); }
+  g.fillStyle = '#152219'; g.fillRect(894, 290, 5, 222);
+}, 512);
+const rgbSRGB = c => new THREE.Color().setRGB(c[0] / 255, c[1] / 255, c[2] / 255, THREE.SRGBColorSpace);
+FACADE_AVG[M_CHURCH] = FACADE_AVG[M_TOWER] = rgbSRGB(STONE_QC);
+FACADE_AVG[M_SCHOOL_R] = rgbSRGB([146, 60, 42]); FACADE_AVG[M_SCHOOL_B] = rgbSRGB([196, 162, 112]);
 // Vitrines (4 commerces différents par texture, un rez-de-chaussée de haut)
 const shopTex = makeTexture(512, (g, W, H) => {
   const signs = ['#7a1f2b', '#1f4a3a', '#1d2f4f', '#262626', '#8a5a1a', '#5a1f4a', '#9b2d20', '#244a5a'];
@@ -1080,6 +1214,11 @@ const CITY_MATS = {
     new THREE.MeshStandardMaterial({ map: trimTex, vertexColors: true, roughness: 0.8 }),
     new THREE.MeshStandardMaterial({ map: railTex, vertexColors: true, roughness: 0.6, alphaTest: 0.5, side: THREE.DoubleSide }),
     new THREE.MeshStandardMaterial({ map: stoneTex, vertexColors: true, roughness: 0.95 }),
+    new THREE.MeshStandardMaterial({ map: churchWallTex, vertexColors: true, roughness: 0.9 }),
+    new THREE.MeshStandardMaterial({ map: churchTowerTex, vertexColors: true, roughness: 0.92 }),
+    new THREE.MeshStandardMaterial({ map: schoolRedTex, vertexColors: true, roughness: 0.9 }),
+    new THREE.MeshStandardMaterial({ map: schoolBeigeTex, vertexColors: true, roughness: 0.9 }),
+    new THREE.MeshStandardMaterial({ map: decalTex, vertexColors: true, alphaTest: 0.5, side: THREE.DoubleSide, roughness: 0.6 }),
   ],
   retro: [
     ...facadeTex.map(() => retroWall),
@@ -1089,6 +1228,8 @@ const CITY_MATS = {
     basic(0x140828),
     basic(hdr(1.9, 0.2, 1.3), { map: railTex, alphaTest: 0.5, side: THREE.DoubleSide }),
     basic(0x120624),
+    retroWall, retroWall, retroWall, retroWall,
+    basic(hdr(1.8, 0.9, 2.1), { map: decalTex, alphaTest: 0.5, side: THREE.DoubleSide }),
   ],
 };
 const COIN_MATS = {
@@ -1327,7 +1468,8 @@ function addWaterPlane(W, x0, x1, z0, z1, level) {
 // =====================================================================
 const DOOR_COLORS = [0x7a2b22, 0x2f4a3a, 0x1f3552, 0x6b4a2b, 0x1c1d1f, 0xe8e2d6].map(col3);
 const FLAT_ROOFS = [0x4a4a48, 0x5c5b57, 0x8f8e89, 0xc9c8c2].map(col3);
-const COPPER = col3(0x5d9a86), SLATE = col3(0x4a5058), CHIMNEY = col3(0x8d857a);
+const COPPER = col3(0x5d9a86), SLATE = col3(0x4a5058), CHIMNEY = col3(0x8d857a), SILVER = col3(0xb4bcc4);
+const PLEX_IRON = [0x1c1d1f, 0x1c1d1f, 0x1c1d1f, 0x23392f, 0x3d3f44, 0x4a2a22, 0xe9e5dc].map(col3);   // escaliers et balcons : noir surtout
 const CITY_STYLES = {
   invente: {
     facades: [[FAC.painted, 0.55], [FAC.brickRed, 0.2], [FAC.brickBeige, 0.15], [FAC.greystone, 0.1]], churchFacade: FAC.greystone,
@@ -1349,7 +1491,7 @@ const CITY_STYLES = {
     paints: [0xd8cbb0, 0x9fb3a8, 0xc9a87a, 0xb85c4a].map(col3),
     trims: [0x2b2320, 0x1c1d1f, 0x2d4a3d, 0xe9e5dc, 0x5a2e25, 0x3d3f44].map(col3),
     metalRoofs: [[COPPER, 0.6], [col3(0x7d858c), 0.4]], hip: false, pitch: 0.9, parapet: 0.8, cornice: 0.45,
-    balconies: 0.85, stairs: 0.45, shopsOn: [0], shopChance: 1, doorSpacing: 3.6, dormers: false, chimneys: false, ac: 0.35,
+    balconies: 0.85, stairs: 0.45, shopsOn: [0], shopChance: 1, doorSpacing: 3.6, dormers: false, chimneys: false, ac: 0.35, plex: true,
   },
 };
 
@@ -1425,7 +1567,7 @@ class CityBatch {
       const [, px, pz] = closestOnSeg(qx, qz, s);
       const tx = px - mx, tz = pz - mz, d = Math.hypot(tx, tz) || 1;
       if (d > s.w / 2 + 12 || (tx * nx + tz * nz) / d < 0.45) continue;
-      if (!best || d < best.d) best = { d, k: s.k };
+      if (!best || d < best.d) best = { d, k: s.k, w: s.w };
     }
     return best;
   }
@@ -1442,6 +1584,7 @@ class CityBatch {
     const { accs: A, edges: E } = this.tile(cx, cz);
     const kind = b.t || '';
     if (kind === 'p') { this.gate(ring, b, A, E, gMin, gMax); return; }       // porte de la ville : on passe dessous
+    const church = kind === 'c', school = kind === 's';
     const name = b.n || '';
     const chateau = kind === 'f';
     const price = /Édifice Price|Price Building/.test(name);
@@ -1451,21 +1594,34 @@ class CityBatch {
     const tall = b.h > 32 && kind !== 'c' && !chateau && !price;
     const box = obb(ring);
     const fill = -ringArea(ring) / (4 * box.ha * box.hb);
-    const fac = tall ? FAC.glass : chateau ? FAC.brickBrown : price || (mansard && kind !== 'c') ? FAC.greystone : kind === 'c' ? S.churchFacade : pickW(S.facades, h1(1));
-    const wallCol = fac === FAC.painted ? pick(S.paints, h1(2)) : gray(0.87 + h1(2) * 0.16);
+    const fac = tall ? FAC.glass : chateau ? FAC.brickBrown : price || (mansard && !church) ? FAC.greystone : church ? M_CHURCH :
+      school ? (h1(1) < 0.62 ? M_SCHOOL_R : M_SCHOOL_B) : pickW(S.facades, h1(1));
+    const wallCol = fac === FAC.painted ? pick(S.paints, h1(2)) : church || school ? gray(0.93 + h1(2) * 0.1) : gray(0.87 + h1(2) * 0.16);
     const blankCol = FACADE_AVG[fac].clone().multiply(wallCol).multiplyScalar(0.95);
     const trimCol = pick(S.trims, h1(3));
-    const hip = !tall && !mansard && ((S.hip && fill > 0.78 && -ringArea(ring) < 1600 && b.h < 30) || (kind === 'c' && fill > 0.55) || price);
-    const R = hip ? (price ? clamp(box.hb * 1.25, 6, 14) : clamp(box.hb * S.pitch, 2, 11)) : 0;
+    const hip = !tall && !mansard && !church && ((S.hip && fill > 0.78 && -ringArea(ring) < 1600 && b.h < 30) || price);
+    const naveHw = church ? (fill > 0.7 ? box.hb : clamp(-ringArea(ring) / (4 * box.ha), 3, box.hb)) : 0;   // demi-largeur de la nef
+    const R = church ? clamp(naveHw * 1.15, 3, 13) : hip ? (price ? clamp(box.hb * 1.25, 6, 14) : clamp(box.hb * S.pitch, 2, 11)) : 0;
     const mh = chateau ? 9 : mansard ? clamp(b.h * 0.25, 3.5, 7) : 0;          // hauteur de la mansarde
-    const parapet = hip ? 0 : mansard ? 0.3 : tall ? 0.5 : S.parapet;
-    const wallTop = chateau ? gMax + 24 : gMax + Math.max(3, hip ? b.h - R * 0.6 : mansard ? b.h - mh * 0.7 : b.h - parapet);
+    const parapet = hip || church ? 0 : mansard ? 0.3 : tall ? 0.5 : S.parapet;
+    const wallTop = chateau ? gMax + 24 : gMax + Math.max(3, hip || church ? b.h - R * 0.6 : mansard ? b.h - mh * 0.7 : b.h - parapet);
     const top = wallTop + parapet;
     const levels = Math.max(1, b.l || Math.round((wallTop - gMin) / 3.2));
     const floorH = clamp((wallTop - gMin) / levels, 2.6, 4.6);
     const base = gMin - 1.2;
     const small = kind === 'g' || b.h < 4.5;
-    const signEdges = b.shops && kind !== 'c' && !chateau && !mansard ? this.shopEdges(ring, b.shops, idx) : null;
+    const signEdges = b.shops && !church && !school && !chateau && !mansard ? this.shopEdges(ring, b.shops, idx) : null;
+    let portalEdge = -1;                                               // école : l'entrée principale sur la plus longue façade sur rue
+    if (school) {
+      let bl = 0;
+      for (let i = 0; i < n; i++) {
+        const [ax, az] = ring[i], [bx, bz] = ring[(i + 1) % n], L = Math.hypot(bx - ax, bz - az);
+        if (L < 8 || L <= bl) continue;
+        const nx = -(bz - az) / L, nz = (bx - ax) / L, mx = (ax + bx) / 2, mz = (az + bz) / 2;
+        if ((L < 60 && this.insideOther(mx + nx * 0.8, mz + nz * 0.8, idx)) || !this.facing(mx, mz, nx, nz)) continue;
+        bl = L; portalEdge = i;
+      }
+    }
 
     for (let i = 0; i < n; i++) {
       const [ax, az] = ring[i], [bx, bz] = ring[(i + 1) % n];
@@ -1477,7 +1633,7 @@ class CityBatch {
       const face = party ? null : this.facing(mx, mz, nx, nz);
       const bays = party || L < 1.6 ? 0 : Math.max(1, Math.round(L / BAY));
       const signs = face && signEdges ? signEdges.get(i) : null;
-      const shop = !!face && bays > 0 && kind !== 'c' && !chateau && !mansard &&
+      const shop = !!face && bays > 0 && !church && !school && !chateau && !mansard &&
         (!!signs || (!tall && !small && (kind === 'k' || (S.shopsOn.includes(face.k) && h1(50) < S.shopChance))));
       const g0 = shop ? Math.min(gMin + Math.max(floorH, 3.9), wallTop) : gMin;
       if (signs && shop) this.signs.add({ ax, az, ux, uz, nx, nz, L, top: g0 - 0.12, shops: signs });
@@ -1492,7 +1648,14 @@ class CityBatch {
         if (shop) quad(A[M_SHOP], ax, base, az, bx, base, bz, bx, g0, bz, ax, g0, az, nx, 0, nz, WHITE, 0, (base - gMin) / (g0 - gMin), bays / 4, 1);
         const y0 = shop ? g0 : base;
         const vv = y => (shop ? 0.25 + (y - g0) / upH / 4 : (y - gMin) / floorH / 4);
-        if (wallTop > y0 + 0.01) quad(A[fac], ax, y0, az, bx, y0, bz, bx, wallTop, bz, ax, wallTop, az, nx, 0, nz, wallCol, 0, vv(y0), bays / 4, vv(wallTop));
+        if (wallTop > y0 + 0.01) {
+          if (fac === M_CHURCH) quad(A[fac], ax, y0, az, bx, y0, bz, bx, wallTop, bz, ax, wallTop, az, nx, 0, nz, wallCol, 0, 0, bays / 2, 1);   // une verrière par travée
+          else quad(A[fac], ax, y0, az, bx, y0, bz, bx, wallTop, bz, ax, wallTop, az, nx, 0, nz, wallCol, 0, vv(y0), bays / 4, vv(wallTop));
+        }
+        if (school) {                                                  // soubassement de pierre
+          const ox = nx * 0.04, oz = nz * 0.04, yb = gMin + 0.45;
+          quad(A[M_STONE], ax + ox, base, az + oz, bx + ox, base, bz + oz, bx + ox, yb, bz + oz, ax + ox, yb, az + oz, nx, 0, nz, gray(0.95), 0, 0, L / 4, (yb - base) / 4);
+        }
       }
       if (parapet > 0) {
         quad(A[M_TRIM], ax, wallTop, az, bx, wallTop, bz, bx, top, bz, ax, top, az, nx, 0, nz, trimCol, 0, 0, L / 4, parapet / 4);
@@ -1506,12 +1669,19 @@ class CityBatch {
           quad(A[M_TRIM], ax, c1, az, bx, c1, bz, bx + ox, c1, bz + oz, ax + ox, c1, az + oz, 0, 1, 0, trimCol);
         }
       }
-      if (face && bays && !tall && !small && kind !== 'c' && !chateau && !mansard) {
-        if (!shop) this.doors(A, ax, az, ux, uz, nx, nz, L, bays, pick(DOOR_COLORS, h1(10 + i)));
-        if (S.balconies > 0 && levels >= 2 && L > 4.5 && face.k !== 3 && h1(30 + i) < S.balconies * (shop ? 0.5 : 1)) {
-          for (let f = 1; f < levels; f++) {
-            const fy = shop ? g0 + (f - 1) * upH : gMin + f * floorH;
-            this.balcony(A, ax, az, ux, uz, nx, nz, L, fy, trimCol, f === 1 && !shop && h1(40 + i) < S.stairs);
+      if (face && bays && !tall && !small && !church && !chateau && !mansard) {
+        if (school) {
+          if (i === portalEdge) this.schoolPortal(A, ax, az, ux, uz, nx, nz, L, gMin, floorH, levels, gray(0.9), name);
+          else this.doors(A, ax, az, ux, uz, nx, nz, L, bays, pick(DOOR_COLORS, h1(10 + i)));
+        } else if (S.plex && !shop && kind !== 'k' && levels >= 2 && levels <= 3 && L >= 5 && L <= 40 && face.k !== 3 && face.d - face.w / 2 > 1.4) {
+          this.plexFront(A, ax, az, ux, uz, nx, nz, L, gMin, floorH, levels, parapet > 0 ? top : 0, trimCol, face, idx * 37 + i);   // duplex, triplex
+        } else {
+          if (!shop) this.doors(A, ax, az, ux, uz, nx, nz, L, bays, pick(DOOR_COLORS, h1(10 + i)));
+          if (S.balconies > 0 && levels >= 2 && L > 4.5 && face.k !== 3 && h1(30 + i) < S.balconies * (shop ? 0.5 : 1)) {
+            for (let f = 1; f < levels; f++) {
+              const fy = shop ? g0 + (f - 1) * upH : gMin + f * floorH;
+              this.balcony(A, ax, az, ux, uz, nx, nz, L, fy, trimCol, f === 1 && !shop && h1(40 + i) < S.stairs);
+            }
           }
         }
       }
@@ -1526,8 +1696,11 @@ class CityBatch {
       }
       if (chateau) { this.turrets(A, E, ring, base, top, mh, col, fac, wallCol); this.keep(A, E, ring, base, gMin, gMax, fac, wallCol, col); }
       if (civicTower) this.civicTower(A, E, ring, base, gMin, top + mh, fac, wallCol, col);
+    } else if (church) {                                                // toit à deux versants en tôle argentée ou en cuivre
+      this.flatRoof(A, ring, wallTop, gray(0.42));
+      this.gableRoof(A, E, box, wallTop, naveHw, R, roofTint || (h1(9) < 0.5 ? SILVER : COPPER), wallCol);
     } else if (hip) {
-      const roofCol = roofTint || (kind === 'c' || price ? COPPER : pickW(S.metalRoofs, h1(5)));
+      const roofCol = roofTint || (price ? COPPER : pickW(S.metalRoofs, h1(5)));
       this.hipRoof(A, E, box, wallTop, R, roofCol, S.dormers && kind !== 'c' && !price ? { fac, wallCol, blankCol } : null, S.chimneys && kind !== 'c' && !price);
     } else {
       this.flatRoof(A, ring, wallTop, tall ? gray(0.55) : pick(FLAT_ROOFS, h1(5)));
@@ -1540,7 +1713,7 @@ class CityBatch {
         }
       }
     }
-    if (kind === 'c') this.steeple(A, E, box, base, gMin, wallTop + R, fac, wallCol);
+    if (church) this.steeple(A, E, box, base, gMin, wallTop + R, wallCol, roofTint || (h1(9) < 0.5 ? SILVER : COPPER), naveHw);
   }
   // Porte de la ville : deux piliers, une voûte au-dessus de la rue, créneaux et échauguettes.
   // Seuls les piliers bloquent la voiture.
@@ -1773,31 +1946,211 @@ class CityBatch {
     }
     return C;
   }
-  // clocher : tour carrée côté rue, étage des cloches à abat-sons, flèche octogonale en cuivre et pinacles
-  steeple(A, E, box, base, gMin, roofTop, fac, wallCol) {
-    const s = clamp(box.hb * 0.9, 4, 9), half = s / 2;
-    const ends = [1, -1].map(sg => [box.cx + box.ax * sg * (box.ha - half), box.cz + box.az * sg * (box.ha - half)]);
-    const [cx, cz] = this.roadDist(...ends[0]) <= this.roadDist(...ends[1]) ? ends[0] : ends[1];
-    const tBell = roofTop + 3, tTop = tBell + Math.max(4.5, s * 0.8);
-    const C = this.towerWalls(A, fac, cx, cz, box.ax, box.az, half, base, tBell, gMin, wallCol, E);
-    obox(A[M_TRIM], cx, cz, box.ax, box.az, half + 0.2, half + 0.2, tBell - 0.3, tBell, wallCol);
-    const stone = wallCol.clone().multiply(FACADE_AVG[FAC.greystone]).multiplyScalar(1.15);
+  // ---------- Église : toit à deux versants, pignons de pierre, façade avec portail et rosace, un ou deux clochers ----------
+  gableRoof(A, E, bx, y, hw, R, col, stoneCol) {
+    const Aa = bx.ha + 0.25, Bb = hw + 0.4, ax = bx.ax, az = bx.az, px = -az, pz = ax;
+    const Wp = (sa, sb, yy) => [bx.cx + ax * sa + px * sb, yy, bx.cz + az * sa + pz * sb];
+    const e1 = Wp(Aa, Bb, y - 0.3), e2 = Wp(-Aa, Bb, y - 0.3), e3 = Wp(-Aa, -Bb, y - 0.3), e4 = Wp(Aa, -Bb, y - 0.3);
+    const r1 = Wp(Aa, 0, y + R), r2 = Wp(-Aa, 0, y + R);
+    const M = A[M_ROOF_METAL], uvOf = pts => pts.flatMap(p => [(p[0] * ax + p[2] * az) / 4, (p[1] - y) / 3]);
+    poly(M, [e1, e2, r2, r1], uvOf([e1, e2, r2, r1]), px, 1, pz, col);
+    poly(M, [e3, e4, r1, r2], uvOf([e3, e4, r1, r2]), -px, 1, -pz, col);
+    for (const sg of [1, -1]) {                                       // pignons
+      const a = Wp(sg * bx.ha, hw, y), b = Wp(sg * bx.ha, -hw, y), c = Wp(sg * bx.ha, 0, y + R - 0.35);
+      poly(A[M_TOWER], [a, b, c], [2 * hw / 12.8, 0, 0, 0, hw / 12.8, (R - 0.35) / 13.6], ax * sg, 0, az * sg, stoneCol);
+    }
+    for (const [p, q] of [[r1, r2], [e1, r1], [e4, r1], [e2, r2], [e3, r2], [e1, e2], [e3, e4]]) E.push(...p, ...q);
+  }
+  decal(A, cx, y0, cz, rx, rz, w, h, nx, nz, r, col = WHITE) {
+    quad(A[M_DECAL], cx - rx * w / 2, y0, cz - rz * w / 2, cx + rx * w / 2, y0, cz + rz * w / 2, cx + rx * w / 2, y0 + h, cz + rz * w / 2, cx - rx * w / 2, y0 + h, cz - rz * w / 2,
+      nx, 0, nz, col, r[0], r[1], r[2], r[3]);
+  }
+  steeple(A, E, box, base, gMin, roofTop, wallCol, spireCol, hw) {
+    const sgF = this.roadDist(box.cx + box.ax * box.ha, box.cz + box.az * box.ha) <= this.roadDist(box.cx - box.ax * box.ha, box.cz - box.az * box.ha) ? 1 : -1;
+    const fx = box.ax * sgF, fz = box.az * sgF, px = -box.az, pz = box.ax, rx = fz, rz = -fx;   // façade tournée vers la rue ; r : à droite en la regardant
+    const twin = box.hb > 11;                                         // grande église : deux clochers encadrant la façade
+    const s = twin ? clamp(box.hb * 0.42, 4.5, 8) : clamp(box.hb * 0.9, 4, 9), half = s / 2;
+    for (const o of twin ? [box.hb - half, -(box.hb - half)] : [0]) {
+      this.tower(A, E, box.cx + fx * (box.ha - half) + px * o, box.cz + fz * (box.ha - half) + pz * o, box.ax, box.az, half, base, gMin, roofTop + (twin ? 1 : 3), wallCol, spireCol);
+    }
+    const fcx = box.cx + fx * (box.ha + 0.07), fcz = box.cz + fz * (box.ha + 0.07), gf = this.W.terrain(fcx, fcz);
+    if (twin) {
+      const gap = 2 * (box.hb - s);                                   // mur de façade entre les deux tours
+      const pw = clamp(gap * 0.42, 2.6, 5), ph = pw * 2.1, d = clamp(gap * 0.6, 3, 9);
+      this.decal(A, fcx, gf - 0.1, fcz, rx, rz, pw, ph, fx, fz, DECAL.portal);
+      this.decal(A, fcx, gf + ph + 1.2, fcz, rx, rz, d, d, fx, fz, DECAL.rose);
+      for (const sg of [-1, 1]) if (gap > 9) this.decal(A, fcx + rx * sg * (pw / 2 + 1.4), gf - 0.1, fcz + rz * sg * (pw / 2 + 1.4), rx, rz, pw * 0.6, ph * 0.72, fx, fz, DECAL.portal);
+    } else {
+      const pw = clamp(s - 1.2, 2.2, 3.6), ph = pw * 2.1, d = clamp(s - 1.8, 1.8, 4);
+      this.decal(A, fcx, gf - 0.1, fcz, rx, rz, pw, ph, fx, fz, DECAL.portal);
+      this.decal(A, fcx, gf + ph + 0.9, fcz, rx, rz, d, d, fx, fz, DECAL.rose);
+      if (hw > s / 2 + 2.2) for (const sg of [-1, 1]) {                 // portes latérales de part et d'autre de la tour
+        const o = (s / 2 + hw) / 2;
+        this.decal(A, fcx + rx * sg * o, gf - 0.1, fcz + rz * sg * o, rx, rz, pw * 0.62, ph * 0.7, fx, fz, DECAL.portal);
+      }
+    }
+    addSeg(this.W.grid, fcx - rx * box.hb, fcz - rz * box.hb, fcx + rx * box.hb, fcz + rz * box.hb, 0.05);
+  }
+  // tour carrée en pierre, étage des cloches à abat-sons, flèche octogonale (argent ou cuivre) et pinacles
+  tower(A, E, cx, cz, ux, uz, half, base, gMin, tBell, wallCol, spireCol) {
+    const s = half * 2, tTop = tBell + Math.max(4.5, s * 0.8);
+    const C = this.towerWalls(A, M_TOWER, cx, cz, ux, uz, half, base, tBell, gMin, wallCol, E);
+    obox(A[M_TRIM], cx, cz, ux, uz, half + 0.2, half + 0.2, tBell - 0.3, tBell, wallCol);
     for (let i = 0; i < 4; i++) {
       const [x0, z0] = C[i], [x1, z1] = C[(i + 1) % 4], hx = (x0 + x1) / 2 - cx, hz = (z0 + z1) / 2 - cz, hl = Math.hypot(hx, hz) || 1;
-      quad(A[M_STONE], x0, tBell, z0, x1, tBell, z1, x1, tTop, z1, x0, tTop, z0, hx, 0, hz, stone, 0, tBell / 4, s / 4, tTop / 4);
-      // baie des cloches : ouverture sombre à abat-sons
+      quad(A[M_TOWER], x0, tBell, z0, x1, tBell, z1, x1, tTop, z1, x0, tTop, z0, hx, 0, hz, wallCol, 0, (tBell - gMin) / 13.6, s / 12.8, (tTop - gMin) / 13.6);
       const mx = (x0 + x1) / 2 + (hx / hl) * 0.04, mz = (z0 + z1) / 2 + (hz / hl) * 0.04, ex = (x1 - x0) / s, ez = (z1 - z0) / s, w = s * 0.22;
-      const yb = tBell + 0.8, yt = tTop - 0.9;
-      quad(A[M_TRIM], mx - ex * w, yb, mz - ez * w, mx + ex * w, yb, mz + ez * w, mx + ex * w, yt, mz + ez * w, mx - ex * w, yt, mz - ez * w, hx, 0, hz, gray(0.16));
-      poly(A[M_TRIM], [[mx - ex * w, yt, mz - ez * w], [mx + ex * w, yt, mz + ez * w], [mx, yt + w * 0.9, mz]], [0, 0, 1, 0, 0.5, 1], hx, 0, hz, gray(0.16));
+      const yb = tBell + 0.8, yt = tTop - 0.9 - w * 0.9;
+      quad(A[M_TRIM], mx - ex * w, yb, mz - ez * w, mx + ex * w, yb, mz + ez * w, mx + ex * w, yt, mz + ez * w, mx - ex * w, yt, mz - ez * w, hx, 0, hz, gray(0.14));
+      poly(A[M_TRIM], [[mx - ex * w, yt, mz - ez * w], [mx + ex * w, yt, mz + ez * w], [mx, yt + w * 0.9, mz]], [0, 0, 1, 0, 0.5, 1], hx, 0, hz, gray(0.14));
+      for (let k = 1; k < 5; k++) {                                   // abat-sons
+        const yy = yb + (yt - yb) * k / 5;
+        quad(A[M_TRIM], mx - ex * w, yy, mz - ez * w, mx + ex * w, yy, mz + ez * w, mx + ex * w, yy + 0.12, mz + ez * w, mx - ex * w, yy + 0.12, mz - ez * w, hx, 0, hz, gray(0.3));
+      }
     }
-    obox(A[M_TRIM], cx, cz, box.ax, box.az, half + 0.3, half + 0.3, tTop, tTop + 0.5, wallCol);
-    coneInto(A[M_ROOF_METAL], cx, cz, half * 0.92, tTop + 0.5, tTop + 0.5 + s * 2.8, 8, COPPER);
-    E.push(cx, tTop + 0.5, cz, cx, tTop + 0.5 + s * 2.8, cz);
+    obox(A[M_TRIM], cx, cz, ux, uz, half + 0.3, half + 0.3, tTop, tTop + 0.5, wallCol);
+    const spireH = s * 2.8;
+    coneInto(A[M_ROOF_METAL], cx, cz, half * 0.92, tTop + 0.5, tTop + 0.5 + spireH, 8, spireCol);
+    obox(A[M_TRIM], cx, cz, ux, uz, 0.06, 0.06, tTop + 0.5 + spireH - 0.3, tTop + 0.5 + spireH + 1.6, gray(0.85));   // croix
+    obox(A[M_TRIM], cx, cz, ux, uz, 0.5, 0.06, tTop + 0.5 + spireH + 0.9, tTop + 0.5 + spireH + 1.05, gray(0.85));
+    E.push(cx, tTop + 0.5, cz, cx, tTop + 0.5 + spireH, cz);
     for (const [x, z] of C) {
-      const px = cx + (x - cx) * 0.9, pz = cz + (z - cz) * 0.9;
-      coneInto(A[M_ROOF_METAL], px, pz, 0.35, tTop + 0.5, tTop + 2.8, 6, COPPER);
+      const qx = cx + (x - cx) * 0.9, qz = cz + (z - cz) * 0.9;
+      coneInto(A[M_ROOF_METAL], qx, qz, 0.35, tTop + 0.5, tTop + 2.8, 6, spireCol);
     }
+  }
+  // ---------- École : entrée en pierre en saillie avec fronton, porte double, nom gravé, drapeau du Québec ----------
+  schoolPortal(A, ax, az, ux, uz, nx, nz, L, gMin, floorH, levels, stoneCol, name) {
+    const T = this.W.terrain, w = Math.min(4.8, L * 0.42), d = 0.7, sm = L / 2;
+    const fx = ax + ux * sm, fz = az + uz * sm, g = T(fx + nx, fz + nz);
+    const hTop = gMin + Math.min(levels, 2) * floorH + 0.4;
+    obox(A[M_TRIM], fx + nx * d / 2, fz + nz * d / 2, ux, uz, w / 2, d / 2, gMin - 0.5, hTop, stoneCol);
+    const fcx = fx + nx * (d + 0.02), fcz = fz + nz * (d + 0.02);
+    poly(A[M_TRIM], [[fcx - ux * (w / 2 + 0.2), hTop, fcz - uz * (w / 2 + 0.2)], [fcx + ux * (w / 2 + 0.2), hTop, fcz + uz * (w / 2 + 0.2)], [fcx, hTop + 1.2, fcz]],
+      [0, 0, 1, 0, 0.5, 1], nx, 0, nz, stoneCol);                    // fronton
+    this.decal(A, fcx, g - 0.05, fcz, ux, uz, 2.5, 3.3, nx, nz, DECAL.door);
+    obox(A[M_TRIM], fx + nx * (d + 0.6), fz + nz * (d + 0.6), ux, uz, w / 2 - 0.3, 0.6, g - 0.4, g + 0.16, stoneCol);   // perron
+    if (name) this.signs.add({ ax: fx - ux * w / 2 + nx * d, az: fz - uz * w / 2 + nz * d, ux, uz, nx, nz, L: w, top: g + 4.5, shops: [{ n: name.toUpperCase(), c: 'e', x: fx, z: fz }] });
+    addSeg(this.W.grid, fx - ux * w / 2 + nx * d, fz - uz * w / 2 + nz * d, fx + ux * w / 2 + nx * d, fz + uz * w / 2 + nz * d, 0.1);
+    // mât et drapeau
+    const mx = fx + ux * (w / 2 + 1.6) + nx * (d + 2.2), mz = fz + uz * (w / 2 + 1.6) + nz * (d + 2.2), gm = T(mx, mz);
+    obox(A[M_TRIM], mx, mz, ux, uz, 0.05, 0.05, gm, gm + 8.6, gray(0.86));
+    obox(A[M_TRIM], mx, mz, ux, uz, 0.1, 0.1, gm + 8.6, gm + 8.8, gray(0.9));
+    quad(A[M_DECAL], mx, gm + 7.3, mz, mx + ux * 1.7, gm + 7.3, mz + uz * 1.7, mx + ux * 1.7, gm + 8.45, mz + uz * 1.7, mx, gm + 8.45, mz, nx, 0, nz, WHITE, ...DECAL.flag);
+    addCircle(this.W.grid, mx, mz, 0.1);
+  }
+  // ---------- Plex montréalais (duplex, triplex) : balcons à chaque étage sur colonnes de fer, une porte par logement,
+  // escalier extérieur droit ou tournant jusqu'au 2e, parfois une 2e volée jusqu'au 3e, corniche à consoles ----------
+  plexFront(A, ax, az, ux, uz, nx, nz, L, gMin, floorH, levels, top, trimCol, face, key) {
+    const hh = k => hash01(key * 977 + k), T = this.W.terrain, W = this.W;
+    const clear = face.d - face.w / 2;                               // place entre la façade et la rue
+    const D = Math.min(1.55, clear - 0.35);
+    const iron = pick(PLEX_IRON, hh(1)), deck = gray(0.45 + hh(2) * 0.3), doorCol = pick(DOOR_COLORS, hh(3));
+    const mods = Math.max(1, Math.round(L / 7.2)), mw = L / mods;
+    const P = (s, d) => [ax + ux * s + nx * d, az + uz * s + nz * d];
+    const door = (s, y) => {
+      const [x, z] = P(s, 0.05), hw = 0.48;
+      quad(A[M_DOOR], x - ux * hw, y, z - uz * hw, x + ux * hw, y, z + uz * hw, x + ux * hw, y + 2.3, z + uz * hw, x - ux * hw, y + 2.3, z - uz * hw, nx, 0, nz, doorCol);
+    };
+    const rail = (s0, d0, s1, d1, y, hx, hz) => {
+      const [x0, z0] = P(s0, d0), [x1, z1] = P(s1, d1);
+      quad(A[M_RAIL], x0, y, z0, x1, y, z1, x1, y + 0.95, z1, x0, y + 0.95, z0, hx, 0, hz, iron, 0, 0, Math.hypot(s1 - s0, d1 - d0), 1);
+    };
+    for (let m = 0; m < mods; m++) {
+      const s0 = m * mw + 0.2, s1 = (m + 1) * mw - 0.2, sm = (s0 + s1) / 2, right = hh(10 + m) < 0.5;
+      const sTop = right ? s1 - 0.3 : s0 + 0.3, dir = right ? -1 : 1;  // l'escalier monte vers ce bout du balcon
+      const sDoor = right ? s0 + 0.8 : s1 - 0.8;
+      door(sDoor, T(...P(sDoor, 0.3)) - 0.05);                        // rez-de-chaussée
+      if (D < 0.9 || s1 - s0 < 3.5) { door(sTop + dir * 0.6, T(...P(sTop, 0.3)) - 0.05); continue; }
+      const stairs = hh(20 + m) < 0.78;
+      const curved = stairs && clear >= 4.6 && hh(30 + m) < 0.55;
+      const straight = stairs && !curved && clear >= 2.9 && s1 - s0 > 4.2;
+      for (let f = 1; f < levels; f++) {
+        const fy = gMin + f * floorH;
+        const c = [P(s0, 0), P(s1, 0), P(s1, D), P(s0, D)];
+        quad(A[M_TRIM], c[0][0], fy, c[0][1], c[1][0], fy, c[1][1], c[2][0], fy, c[2][1], c[3][0], fy, c[3][1], 0, 1, 0, deck);
+        quad(A[M_TRIM], c[0][0], fy - 0.14, c[0][1], c[1][0], fy - 0.14, c[1][1], c[2][0], fy - 0.14, c[2][1], c[3][0], fy - 0.14, c[3][1], 0, -1, 0, deck);
+        quad(A[M_TRIM], c[3][0], fy - 0.14, c[3][1], c[2][0], fy - 0.14, c[2][1], c[2][0], fy, c[2][1], c[3][0], fy, c[3][1], nx, 0, nz, iron);
+        // garde-corps (ouvert là où arrive l'escalier)
+        const gapA = Math.min(sTop, sTop + dir * 1.1), gapB = Math.max(sTop, sTop + dir * 1.1);
+        if (f === 1 && (straight || curved)) {
+          if (gapA - s0 > 0.1) rail(s0, D - 0.03, gapA, D - 0.03, fy, nx, nz);
+          if (s1 - gapB > 0.1) rail(gapB, D - 0.03, s1, D - 0.03, fy, nx, nz);
+        } else rail(s0, D - 0.03, s1, D - 0.03, fy, nx, nz);
+        rail(s0, 0, s0, D - 0.03, fy, -ux, -uz);
+        rail(s1, 0, s1, D - 0.03, fy, ux, uz);
+        const [ex, ez] = P(sm, D - 0.03);
+        obox(A[M_TRIM], ex, ez, ux, uz, (s1 - s0) / 2, 0.035, fy + 0.93, fy + 1.0, iron);
+        // une porte par logement : au 2e d'un triplex, celle du 2e et celle du 3e (escalier intérieur)
+        const nd = f === 1 && levels >= 3 ? 2 : 1;
+        for (let q = 0; q < nd; q++) door(sTop + dir * (0.75 + q * 1.1), fy);
+      }
+      const topY = gMin + (levels - 1) * floorH - 0.14;
+      for (const s of s1 - s0 > 5.5 ? [s0 + 0.08, sm, s1 - 0.08] : [s0 + 0.08, s1 - 0.08]) {   // colonnes de fer
+        const [x, z] = P(s, D - 0.08);
+        obox(A[M_TRIM], x, z, ux, uz, 0.05, 0.05, T(x, z) - 0.1, topY, iron);
+        addCircle(W.grid, x, z, 0.08);
+      }
+      const fy1 = gMin + floorH, dS = D + 0.55;
+      if (curved) {                                                   // escalier tournant : longe la façade puis tourne vers le trottoir
+        const Ls = 1.0, Rr = 1.25, Lb = 0.4, pts = [[sTop, dS], [sTop + dir * Ls, dS]];
+        for (let k = 1; k <= 8; k++) { const a = (k / 8) * Math.PI / 2; pts.push([sTop + dir * (Ls + Rr * Math.sin(a)), dS + Rr - Rr * Math.cos(a)]); }
+        pts.push([sTop + dir * (Ls + Rr), dS + Rr + Lb]);
+        this.stairs(A, P, ux, uz, nx, nz, pts.reverse(), fy1, iron);
+      } else if (straight) {                                          // escalier droit le long de la façade
+        const run = Math.min((fy1 - gMin) * 1.08, s1 - s0 - 0.6);
+        this.stairs(A, P, ux, uz, nx, nz, [[sTop + dir * run, dS], [sTop, dS]], fy1, iron);
+      }
+      if (levels >= 3 && D >= 1.3 && hh(40 + m) < 0.3) {              // triplex : 2e volée extérieure, sur le balcon, jusqu'au 3e
+        const run = Math.min(floorH * 1.05, s1 - s0 - 2.6), sB = sTop + dir * 2.4;
+        if (run > 2) this.stairs(A, P, ux, uz, nx, nz, [[sB + dir * run, D * 0.55], [sB, D * 0.55]], gMin + 2 * floorH, iron, fy1, 0.8);
+      }
+    }
+    if (top && hh(5) < 0.65 && this.S.cornice > 0) {                 // consoles sous la corniche
+      const c = this.S.cornice, y1 = top - 0.5, y0 = y1 - 0.38;
+      for (let s = 0.45; s < L - 0.3; s += 1.1) {
+        const [x0, z0] = P(s - 0.07, 0), [x1, z1] = P(s + 0.07, 0), [x2, z2] = P(s + 0.07, c), [x3, z3] = P(s - 0.07, c);
+        quad(A[M_TRIM], x3, y0 + 0.2, z3, x2, y0 + 0.2, z2, x2, y1, z2, x3, y1, z3, nx, 0, nz, trimCol);
+        quad(A[M_TRIM], x0, y0, z0, x3, y0 + 0.2, z3, x3, y1, z3, x0, y1, z0, -ux, 0, -uz, trimCol);
+        quad(A[M_TRIM], x2, y0 + 0.2, z2, x1, y0, z1, x1, y1, z1, x2, y1, z2, ux, 0, uz, trimCol);
+      }
+    }
+  }
+  // escalier (contremarches ouvertes) le long d'une polyligne (s, d) du bas vers le haut : marches, limons, rampes à barreaux
+  stairs(A, P, ux, uz, nx, nz, pts, fy, iron, y0 = null, w = 1.0) {
+    const T = this.W.terrain, W = this.W;
+    const cum = [0];
+    for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+    const Lt = cum[cum.length - 1];
+    const gb = y0 != null ? y0 : T(...P(pts[0][0], pts[0][1])), rise = fy - gb;
+    if (rise < 1 || Lt < 1) return;
+    const at = u => {
+      let i = 0;
+      while (i < pts.length - 2 && cum[i + 1] < u) i++;
+      const L = cum[i + 1] - cum[i] || 1, f = clamp((u - cum[i]) / L, 0, 1);
+      const ts = (pts[i + 1][0] - pts[i][0]) / L, td = (pts[i + 1][1] - pts[i][1]) / L;
+      return [pts[i][0] + (pts[i + 1][0] - pts[i][0]) * f, pts[i][1] + (pts[i + 1][1] - pts[i][1]) * f, ts, td];
+    };
+    const edge = (u, side) => { const [s, d, ts, td] = at(u); return P(s - td * side * w / 2, d + ts * side * w / 2); };
+    const yAt = u => gb + rise * u / Lt;
+    const N = Math.max(4, Math.round(rise / 0.2));
+    for (let k = 0; k < N; k++) {                                     // marches
+      const u0 = Lt * k / N, u1 = Lt * (k + 1) / N, y = gb + rise * (k + 1) / N;
+      const a = edge(u0, -1), b = edge(u0, 1), c = edge(u1, 1), d = edge(u1, -1);
+      quad(A[M_TRIM], a[0], y, a[1], b[0], y, b[1], c[0], y, c[1], d[0], y, d[1], 0, 1, 0, iron);
+    }
+    for (let i = 0; i < pts.length - 1; i++) {                       // limons et rampes, tronçon par tronçon
+      const u0 = cum[i], u1 = cum[i + 1], ya = yAt(u0), yb = yAt(u1);
+      const [, , ts, td] = at((u0 + u1) / 2);
+      for (const side of [-1, 1]) {
+        const a = edge(u0, side), b = edge(u1, side);
+        const hx = (ux * -td + nx * ts) * side, hz = (uz * -td + nz * ts) * side;
+        quad(A[M_TRIM], a[0], ya - 0.3, a[1], b[0], yb - 0.3, b[1], b[0], yb + 0.03, b[1], a[0], ya + 0.03, a[1], hx, 0, hz, iron);
+        quad(A[M_RAIL], a[0], ya + 0.03, a[1], b[0], yb + 0.03, b[1], b[0], yb + 0.95, b[1], a[0], ya + 0.95, a[1], hx, 0, hz, iron, 0, 0, u1 - u0, 1);
+      }
+      if (y0 == null) { const [s0, d0] = at(u0), [s1, d1] = at(u1), [x0, z0] = P(s0, d0), [x1, z1] = P(s1, d1); addSeg(W.grid, x0, z0, x1, z1, w / 2 - 0.05); }
+    }
+    if (y0 == null) for (const side of [-1, 1]) { const [x, z] = edge(0, side); obox(A[M_TRIM], x, z, ux, uz, 0.06, 0.06, gb - 0.1, gb + 1.05, iron); }   // pilastres au pied
   }
 }
 
@@ -1813,6 +2166,7 @@ const SIGN_STYLE = {
   t: { bg: [0x141414, 0x5a1020], fg: 0xf0c75a, neon: [2.4, 1.9, 0.4] },                          // cinémas, théâtres
   g: { bg: [0x1f5f7a, 0x2d6a2f, 0xb8452a], fg: 0xffffff, neon: [0.3, 2.2, 1.6] },                // épiceries, SAQ…
   s: { bg: [0x1f2a44, 0x5a1f4a, 0x2b2b2b, 0x7a4a14, 0x244a5a, 0x6b1d2a, 0x3d4a2a, 0xefe9dc], fg: 0xf6f1e6, neon: [1.6, 0.4, 2.3] },
+  e: { bg: [0xd9cfbd, 0xcfc5b2], fg: 0x2b2620, neon: [0.3, 1.8, 2.4] },                          // nom gravé des écoles
 };
 const SIGN_FONT = '700 33px "Barlow Semi Condensed", "Arial Narrow", Arial, sans-serif';
 const SIGN_ROW = 48, SIGN_PAGE = 2048, SIGN_H = 0.84;
