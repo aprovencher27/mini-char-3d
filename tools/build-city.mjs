@@ -355,6 +355,7 @@ async function buildArea(id, A) {
   const riverRaw = A.river ? await overpass('river', 'relation["natural"="water"]["water"="river"];way(r);out geom;', 0.01) : { elements: [] };
   const greenRaw = await overpass('green', '(way["leisure"~"^(park|garden)$"];relation["leisure"="park"];way["landuse"~"^(grass|forest|recreation_ground|village_green|cemetery)$"];way["natural"~"^(wood|scrub|grassland)$"];node["natural"="tree"];);out geom;');
   const areasRaw = await overpass('areas', '(way["leisure"~"^(park|garden)$"]["name"];relation["leisure"~"^(park|garden)$"]["name"];way["place"="square"]["name"];relation["place"="square"]["name"];way["highway"="pedestrian"]["area"="yes"]["name"];);out geom;');
+  const sportsRaw = await overpass('sports', '(way["leisure"~"^(pitch|swimming_pool|ice_rink|track|playground|skatepark|water_park|sports_centre|stadium)$"];relation["leisure"~"^(pitch|swimming_pool|ice_rink|track|sports_centre|stadium)$"];);out geom;');
   const schoolsRaw = await overpass('schools', '(way["amenity"~"^(school|college|university|kindergarten)$"];relation["amenity"~"^(school|college|university)$"];);out geom;');
   const lmRaw = await overpass('landmarks', `nwr["name"~"${A.landmarks.map(l => l[1].source.replace(/[\^$]/g, '')).join('|')}"];out center tags;`);
   const dem = await elevation();
@@ -464,6 +465,8 @@ async function buildArea(id, A) {
       else if (/church|cathedral|chapel|basilica/.test(type) || /^(Basilique|Église|Chapelle|Cathédrale)|Church/.test(name)) kind = 'c';
       else if (/^(school|university|college|kindergarten)$/.test(type) || /^(school|college|university|kindergarten)$/.test(t.amenity || '') ||
         /^(École|Ecole|Collège|Académie|Pensionnat|Cégep|Université)\b/i.test(name)) kind = 's';
+      else if (/sports_hall|sports_centre|stadium|grandstand|riding_hall/.test(type) || /^(ice_rink|sports_centre|stadium|swimming_pool)$/.test(t.leisure || '') ||
+        /^(Aréna|Arena|Centre sportif|Complexe sportif|Piscine|Palestre|Centre aquatique|Pavillon sportif)/i.test(name)) kind = 'a';   // aréna, centre sportif
       else if (/commercial|retail|office|hotel|supermarket|kiosk/.test(type) || t.shop || t.amenity === 'restaurant') kind = 'k';
       else if (/house|residential|apartments|terrace|detached|semidetached/.test(type)) kind = 'r';
       else if (/garage|shed|roof|carport|hut/.test(type)) kind = 'g';
@@ -718,6 +721,43 @@ async function buildArea(id, A) {
     console.log(`  ${shops.length} commerces nommés sur ${cands.length} (${Object.entries(byCat).map(([k, v]) => `${k}:${v}`).join(' ')}) — ${shops.slice(0, 12).map(s => s.n).join(', ')}…`);
   }
 
+  // ---------- Terrains de sport, piscines, patinoires, jeux pour enfants ----------
+  const sports = [];
+  {
+    const SPORT = { tennis: 'tennis', soccer: 'soccer', american_football: 'soccer', rugby: 'soccer', baseball: 'baseball', softball: 'baseball',
+      basketball: 'basket', volleyball: 'volley', beachvolleyball: 'volley', boules: 'boules', petanque: 'boules', bocce: 'boules',
+      ice_hockey: 'rink', hockey: 'rink', ice_skating: 'rink', skateboard: 'skate', running: 'track', athletics: 'track', multi: 'multi', futsal: 'multi', handball: 'multi' };
+    for (const el of sportsRaw.elements) {
+      const t = el.tags || {}, lz = t.leisure, sp = String(t.sport || '').split(';')[0];
+      const name = String(t.name || '').trim();
+      for (let ring of polygonsOf(el)) {
+        ring = simplify(ring.concat([ring[0]]), 0.4).slice(0, -1);
+        const a = Math.abs(area(ring));
+        if (ring.length < 3 || a < 25) continue;
+        const [cx, cz] = centroid(ring);
+        if (!inside(cx, cz) || !inRegion(cx, cz, 0)) continue;
+        const indoor = t.indoor === 'yes' || t.covered === 'yes' || t.location === 'indoor' || t.building || nearBuilding(cx, cz, -0.1);
+        if (lz === 'sports_centre' || lz === 'stadium' || (indoor && /ice_rink|swimming_pool/.test(lz))) {   // aréna : le bâtiment dessus
+          for (const i of bGrid.near(cx, cz, 60)) {
+            const b = buildings[i];
+            if (/^[cfp]$/.test(b.t || '')) continue;
+            const [bx, bz] = centroid(bRings[i]);
+            if (pointInRing(bx, bz, ring) || pointInRing(cx, cz, bRings[i])) { b.t = 'a'; if (!b.n && name) b.n = name; }
+          }
+          continue;
+        }
+        if (indoor || /roof/.test(t.location || '') || +(t.level || 0) > 0) continue;   // piscines sur les toits : non
+        let k = lz === 'swimming_pool' || lz === 'water_park' ? (/private|customers/.test(t.access || '') ? null : 'pool') : lz === 'ice_rink' ? 'rink' : lz === 'track' ? 'track' :
+          lz === 'playground' ? 'play' : lz === 'skatepark' ? 'skate' : lz === 'pitch' ? SPORT[sp] || 'multi' : null;
+        if (!k || (k === 'play' && a < 60)) continue;
+        sports.push({ k, n: name, p: flat(ring) });
+      }
+    }
+    const byK = {};
+    for (const q of sports) byK[q.k] = (byK[q.k] || 0) + 1;
+    console.log(`  ${sports.length} terrains de sport (${Object.entries(byK).map(([k, v]) => `${k}:${v}`).join(' ')}), ${buildings.filter(b => b.t === 'a').length} arénas et centres sportifs`);
+  }
+
   // ---------- Adresses civiques (pour « Aller à… ») ----------
   const addr = {};
   {
@@ -791,7 +831,7 @@ async function buildArea(id, A) {
     areas: areas.map(({ n, p }) => ({ n, p })),
     bikes,
     shops: shops.map(s => ({ n: s.n, c: s.c, b: s.b, x: round1(s.x), z: round1(s.z) })),
-    addr, statues,
+    addr, statues, sports,
     limit: limit ? flat(limit) : null,
     district: relEl ? (relEl.tags || {}).name : null,
   };
