@@ -117,6 +117,11 @@
     border-radius: 50%; background: var(--coin); box-shadow: inset 0 0 0 2px var(--coin-shadow); vertical-align: 0.02em;
   }
   .speed-row { display: none; }
+  #nitro { display: flex; justify-content: flex-end; align-items: center; gap: 5px; }
+  #nitro i { display: block; width: 13px; height: 17px; border-radius: 4px; border: 2px solid var(--sign-white); opacity: 0.4; }
+  #nitro i.on { opacity: 1; background: #53c8ff; border-color: #d8f4ff; box-shadow: 0 0 8px rgba(83, 200, 255, 0.85); }
+  #nitro.boost i { animation: nitroglow 0.2s linear infinite alternate; }
+  @keyframes nitroglow { to { filter: brightness(1.7); } }
 
   #speedo {
     right: var(--right); bottom: var(--bottom);
@@ -241,6 +246,7 @@
   .tbtn.small { width: 58px; height: 58px; font-size: 13px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
   .tbtn.gas { background: var(--gas); }
   .tbtn.brake { background: var(--brake); }
+  .tbtn.nitro { background: rgba(83, 200, 255, 0.42); }
   .tbtn.on { filter: brightness(1.5); transform: scale(0.95); }
   body.touch #touch { display: flex; }
   body.touch #help, body.touch .chip kbd, body.touch .controls { display: none; }
@@ -277,6 +283,7 @@
   body.retro kbd { font-family: var(--font-display); font-size: 8px; padding: 4px 5px 3px; }
   body.retro .win-time { font-family: var(--font-display); font-size: clamp(22px, 6vw, 34px); }
   body.retro .tbtn.small { font-family: var(--font-display); font-size: 8px; }
+  body.retro #nitro i.on { background: var(--sign-white); border-color: #ffffff; box-shadow: 0 0 10px var(--sign-white); }
 
   @media (max-width: 600px) {
     #minimap { width: 120px; height: 120px; }
@@ -298,6 +305,7 @@
   }
   @media (prefers-reduced-motion: reduce) {
     #toast { transition: none; }
+    #nitro.boost i { animation: none; }
     #streetsign.pop { animation: none; }
     .btn:active, .tbtn.on { transform: none; }
   }
@@ -314,6 +322,7 @@
   <span class="k">Pièces</span><span class="v" id="coins">0 / 32</span>
   <span class="k">Temps</span><span class="v" id="time">00:00.0</span>
   <span class="k speed-row">Vitesse</span><span class="v speed-row" id="speed2">0 km/h</span>
+  <span class="k">Nitro</span><span class="v" id="nitro"><i></i><i></i><i></i></span>
   <span class="k" id="best-k" hidden>Record</span><span class="v" id="best" hidden></span>
 </div>
 
@@ -330,7 +339,7 @@
 
 <div id="help" class="hud">
   <kbd>Z</kbd><kbd>Q</kbd><kbd>S</kbd><kbd>D</kbd> ou flèches <span class="sep">·</span>
-  <kbd>Espace</kbd> drift <span class="sep">·</span> <kbd>G</kbd> années 80 <span class="sep">·</span> <kbd>R</kbd> replacer
+  <kbd>Espace</kbd> drift <span class="sep">·</span> <kbd>N</kbd> nitro <span class="sep">·</span> <kbd>G</kbd> années 80 <span class="sep">·</span> <kbd>R</kbd> replacer
 </div>
 
 <div id="toast" class="hud" role="status" aria-live="polite"></div>
@@ -341,6 +350,7 @@
     <button class="tbtn" data-k="right" type="button">▶</button>
   </div>
   <div class="tgroup">
+    <button class="tbtn small nitro" id="btn-nitro" type="button">N₂O</button>
     <button class="tbtn small" data-k="hb" type="button">Drift</button>
     <div class="tcol">
       <button class="tbtn gas" data-k="up" type="button">▲</button>
@@ -353,7 +363,7 @@
   <section class="sign-panel" aria-labelledby="menu-title">
     <p class="eyebrow" id="menu-eyebrow">Départ · Centre-ville</p>
     <h1 id="menu-title">Mini Char 3D</h1>
-    <p class="lede">Prends le volant d'une petite voiture et ramasse les <strong id="menu-count">32 pièces d'or</strong> le plus vite possible.</p>
+    <p class="lede">Prends le volant d'une petite voiture et ramasse les <strong id="menu-count">32 pièces d'or</strong> le plus vite possible. Les bonbonnes bleues donnent du nitro.</p>
     <div class="options">
       <fieldset class="opt wide">
         <legend>Carte</legend>
@@ -404,8 +414,9 @@
       <dt><kbd>M</kbd></dt><dd>Son</dd>
       <dt><kbd>V</kbd></dt><dd>Voix des rues</dd>
       <dt><kbd>Échap</kbd></dt><dd>Menu</dd>
+      <dt><kbd>N</kbd><kbd>Maj</kbd></dt><dd>Nitro</dd>
     </dl>
-    <p class="touch-help">◀ ▶ pour tourner, ▲ pour accélérer, ▼ pour freiner et reculer, <strong>Drift</strong> pour le frein à main. La carte en haut à droite montre les pièces restantes.</p>
+    <p class="touch-help">◀ ▶ pour tourner, ▲ pour accélérer, ▼ pour freiner et reculer, <strong>Drift</strong> pour le frein à main, <strong>N₂O</strong> pour le nitro. La carte en haut à droite montre les pièces restantes.</p>
     <div class="actions">
       <button id="btn-start" class="btn" type="button">Démarrer</button>
       <button id="btn-new" class="btn ghost" type="button" hidden>Nouvelle partie</button>
@@ -459,6 +470,7 @@ const REVERSE_MAX = 12;
 const SLOPE_G = 12;
 const CAR_R = 1.05;                       // rayon des deux cercles de collision de la voiture
 const PHYS_STEP = 1 / 120;
+const NITRO_MAX_SPEED = 58, NITRO_ACC = 24, NITRO_TIME = 2.6, NITRO_CAP = 3;   // nitro : ~210 km/h pendant 2,6 s
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
 const Z_AXIS = new THREE.Vector3(0, 0, 1);
 const ONE = new THREE.Vector3(1, 1, 1);
@@ -555,8 +567,9 @@ function addSeg(grid, ax, az, bx, bz, r) {
   return item;
 }
 function addCircle(grid, x, z, r) {
-  const m = r + CAR_R + 0.5;
-  grid.add({ seg: false, x, z, r }, x - m, z - m, x + m, z + m);
+  const m = r + CAR_R + 0.5, item = { seg: false, x, z, r, off: false };
+  grid.add(item, x - m, z - m, x + m, z + m);
+  return item;
 }
 function segIntersect(ax, az, bx, bz, cx, cz, dx, dz) {
   const rx = bx - ax, rz = bz - az, sx = dx - cx, sz = dz - cz, den = rx * sz - rz * sx;
@@ -1904,7 +1917,7 @@ class SignBatch {
 }
 
 function plantTrees(W, list) {
-  for (const t of list) addCircle(W.grid, t.x, t.z, 0.55 * t.s);
+  for (const t of list) { t.item = addCircle(W.grid, t.x, t.z, 0.55 * t.s); t.item.tree = t; t.parts = []; t.fly = null; }
   const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3();
   const instanced = (geo, pair, arr, colored) => {
     if (!arr.length) return;
@@ -1912,6 +1925,7 @@ function plantTrees(W, list) {
     arr.forEach((t, i) => {
       _q.setFromAxisAngle(Y_AXIS, t.rot); _s.setScalar(t.s); _p.set(t.x, t.y - 0.15, t.z);
       im.setMatrixAt(i, _m.compose(_p, _q, _s));
+      t.parts.push([im, i]);
       if (colored) im.setColorAt(i, t.col);
     });
     reg(im, pair.normal, pair.retro);
@@ -1924,6 +1938,12 @@ function plantTrees(W, list) {
   instanced(new THREE.ConeGeometry(1.7, 3.2, 7).translate(0, 3.1, 0), MAT.leaf, pines, true);
   instanced(new THREE.ConeGeometry(1.2, 2.5, 7).translate(0, 4.6, 0), MAT.leaf, pines, true);
   instanced(new THREE.IcosahedronGeometry(1.9, 0).translate(0, 3.5, 0), MAT.leaf, rounds, true);
+  W.trees = list;
+  // nouvelle partie : les arbres arrachés reprennent racine
+  W.resetTrees = () => {
+    for (const t of W.knockedTrees || []) { t.fly = null; t.item.off = false; setTreeMatrix(t); }
+    if (W.knockedTrees) W.knockedTrees.length = 0;
+  };
 }
 const pineColor = () => new THREE.Color().setHSL(rrange(0.33, 0.38), 0.45, rrange(0.24, 0.31), THREE.SRGBColorSpace);
 const roundColor = () => rand() < 0.12
@@ -1953,13 +1973,13 @@ const MAP_PAL = {
     bg: '#8d9a86', land: [196, 190, 176], grass: [118, 168, 86], water: [92, 156, 208], rock: [150, 142, 128],
     building: '#8f877d', pad: '#bdb7ab', road: '#f7f4ea', major: '#fff1c2', ped: '#e3d3b6', wall: '#7a5f43',
     ramp: '#ffb703', coin: '#ffc83d', coinLine: '#12171c', car: '#d62f2f', carLine: '#ffffff', text: 'rgba(18,23,28,0.8)', bike: '#2f9a55',
-    outside: 'rgba(38,44,50,0.5)', limit: '#1f4f8f',
+    outside: 'rgba(38,44,50,0.5)', limit: '#1f4f8f', nitro: '#1d8fff',
   },
   retro: {
     bg: '#0b0217', land: [18, 7, 34], grass: [10, 38, 34], water: [8, 18, 60], rock: [44, 16, 66],
     building: '#2c1257', pad: '#1a0b33', road: '#ff2bd6', major: '#ff6ae4', ped: '#a44ad0', wall: '#29f3ff',
     ramp: '#ffe45c', coin: '#ffe45c', coinLine: '#0b0217', car: '#29f3ff', carLine: '#ffffff', text: 'rgba(41,243,255,0.85)', bike: '#39ff14',
-    outside: 'rgba(4,0,10,0.62)', limit: '#ffe45c',
+    outside: 'rgba(4,0,10,0.62)', limit: '#ffe45c', nitro: '#29f3ff',
   },
 };
 // classify(x, z) renvoie « classe + nuance » : 0 ville, 1 verdure, 2 eau, 3 roche ; la partie décimale éclaircit
@@ -2191,6 +2211,7 @@ function buildInventedWorld() {
   addCoins(W, spots);
   W.roadGrid = roadGrid;
   parkVehicles(W, 320, 0.35);
+  addNitros(W, 12);
 
   // arbres et rochers
   const trees = [];
@@ -2626,6 +2647,7 @@ function buildRealWorld(id, D, cityStyle) {
   plantTrees(W, trees);
   addCoins(W, D.coins);
   parkVehicles(W, id === 'plateau' ? 2200 : 800, id === 'plateau' ? 0.5 : 0.4);
+  addNitros(W, id === 'plateau' ? 30 : 16);
 
   // mini-carte (suit la voiture)
   const ext = { minX: M.x0, maxX: M.x0 + M.nx * M.cell, minZ: M.z0, maxZ: M.z0 + M.nz * M.cell };
@@ -2781,7 +2803,7 @@ function buildChantier(W) {
   const G = W.ground;
   const C = { group: new THREE.Group(), grid: new Grid(16), jumps: new Grid(16), cones: [], coneGrid: new Grid(8), cyclists: [], moving: [] };
   const A = Array.from({ length: 7 }, acc);
-  const avoid = [[W.spawn.x, W.spawn.z, 16], ...W.coins.map(c => [c.x, c.z, 5.5])];
+  const avoid = [[W.spawn.x, W.spawn.z, 16], ...W.coins.map(c => [c.x, c.z, 5.5]), ...(W.nitros ? W.nitros.list.map(n => [n.x, n.z, 7]) : [])];
   if (W.id === 'invente') for (const r of INV_RAMPS) avoid.push([r.x + r.fx * r.len / 2, r.z + r.fz * r.len / 2, 14]);
   const clear = (x, z, r = 0) => avoid.every(([ax, az, ar]) => (x - ax) ** 2 + (z - az) ** 2 > (ar + r) ** 2);
   const flatAround = (x, z, r) => { const g0 = G(x, z); return [[r, 0], [-r, 0], [0, r], [0, -r]].every(([dx, dz]) => Math.abs(G(x + dx, z + dz) - g0) < 0.45); };
@@ -2793,44 +2815,26 @@ function buildChantier(W) {
     C.cones.push({ i, x, z, y: G(x, z), hx: x, hz: z, hy: G(x, z), yaw: rand() * 6.28, rx: 0, rz: 0, vx: 0, vy: 0, vz: 0, sx: 0, sz: 0, moving: false, down: false });
     C.coneGrid.add(i, x, z, x, z);
   };
-  const jerseyBarrier = (x, z, ux, uz) => {   // glissière de béton (profil « New Jersey »)
-    const y = G(x, z);
-    obox(A[KC.plain], x, z, ux, uz, 1.5, 0.3, y - 0.2, y + 0.32, CH_COL.concrete);
-    obox(A[KC.plain], x, z, ux, uz, 1.5, 0.15, y + 0.32, y + 0.84, CH_COL.concrete);
-    addSeg(C.grid, x - ux * 1.5, z - uz * 1.5, x + ux * 1.5, z + uz * 1.5, 0.3);
+  // pièces renversables (instances) : glissière, barrière, clôture en panneaux, panneaux DÉTOUR / RUE BARRÉE
+  const PG = propGeometries();
+  C.props = [];
+  const addProp = (type, x, z, ux, uz, len, r) => {
+    const p = { type, slot: 0, mesh: null, x, y: G(x, z), z, yaw: Math.atan2(-uz, ux), sx: len / PG[type].len, fly: null };
+    p.hx = p.x; p.hy = p.y; p.hz = p.z;
+    const hl = len / 2;
+    p.item = addSeg(C.grid, x - ux * hl, z - uz * hl, x + ux * hl, z + uz * hl, r);
+    p.item.prop = p;
+    C.props.push(p);
   };
-  const barricade = (x, z, ux, uz, len = 2.4) => {   // barrière rayée orange et blanc, avec feu clignotant
-    const y = G(x, z), vx = -uz, vz = ux, hl = len / 2;
-    for (const sg of [-1, 1]) obox(A[KC.plain], x + ux * hl * sg, z + uz * hl * sg, ux, uz, 0.05, 0.35, y, y + 1.15, CH_COL.white);
-    for (const [y0, y1] of [[0.55, 0.8], [0.88, 1.13]]) for (const sd of [-1, 1]) {
-      const ox = vx * 0.04 * sd, oz = vz * 0.04 * sd;
-      quad(A[KC.stripe], x - ux * hl + ox, y + y0, z - uz * hl + oz, x + ux * hl + ox, y + y0, z + uz * hl + oz,
-        x + ux * hl + ox, y + y1, z + uz * hl + oz, x - ux * hl + ox, y + y1, z - uz * hl + oz, vx * sd, 0, vz * sd, WHITE, 0, 0, len / 0.8, 1);
-    }
-    obox(A[KC.light], x + ux * hl, z + uz * hl, ux, uz, 0.09, 0.09, y + 1.15, y + 1.33, WHITE);
-    addSeg(C.grid, x - ux * hl, z - uz * hl, x + ux * hl, z + uz * hl, 0.25);
-  };
-  const fence = (ax, az, bx, bz) => {   // clôture de chantier en filet orange, sur blocs de béton
+  const jerseyBarrier = (x, z, ux, uz) => addProp('jersey', x, z, ux, uz, 3, 0.3);   // glissière de béton (profil « New Jersey »)
+  const barricade = (x, z, ux, uz, len = 2.4) => addProp('barricade', x, z, ux, uz, len, 0.25);   // barrière rayée, feu clignotant
+  const fence = (ax, az, bx, bz) => {   // clôture de chantier : panneaux de filet orange sur blocs de béton
     const L = Math.hypot(bx - ax, bz - az);
     if (L < 0.5) return;
-    const ux = (bx - ax) / L, uz = (bz - az) / L, ya = G(ax, az), yb = G(bx, bz);
-    quad(A[KC.fence], ax, ya + 0.12, az, bx, yb + 0.12, bz, bx, yb + 1.9, bz, ax, ya + 1.9, az, -uz, 0, ux, WHITE, 0, 0, L, 1);
-    const n = Math.max(1, Math.round(L / 3));
-    for (let k = 0; k <= n; k++) {
-      const x = ax + (bx - ax) * k / n, z = az + (bz - az) * k / n, y = G(x, z);
-      obox(A[KC.plain], x, z, ux, uz, 0.35, 0.18, y - 0.1, y + 0.14, CH_COL.concrete);
-      obox(A[KC.plain], x, z, ux, uz, 0.03, 0.03, y + 0.14, y + 1.95, CH_COL.post);
-    }
-    addSeg(C.grid, ax, az, bx, bz, 0.15);
+    const ux = (bx - ax) / L, uz = (bz - az) / L, n = Math.max(1, Math.round(L / 3.2)), seg = L / n;
+    for (let k = 0; k < n; k++) addProp('fence', ax + ux * seg * (k + 0.5), az + uz * seg * (k + 0.5), ux, uz, seg, 0.15);
   };
-  const detour = (x, z, ux, uz) => {   // panneau DÉTOUR tourné vers les voitures qui arrivent (sens u)
-    const y = G(x, z), vx = -uz, vz = ux, ox = -ux * 0.03, oz = -uz * 0.03;
-    quad(A[KC.sign], x - vx * 0.65 + ox, y + 0.85, z - vz * 0.65 + oz, x + vx * 0.65 + ox, y + 0.85, z + vz * 0.65 + oz,
-      x + vx * 0.65 + ox, y + 1.5, z + vz * 0.65 + oz, x - vx * 0.65 + ox, y + 1.5, z - vz * 0.65 + oz, -ux, 0, -uz, WHITE);
-    obox(A[KC.plain], x, z, vx, vz, 0.68, 0.025, y + 0.83, y + 1.52, CH_COL.dark);
-    for (const sg of [-1, 1]) obox(A[KC.plain], x + vx * 0.55 * sg, z + vz * 0.55 * sg, ux, uz, 0.3, 0.03, y, y + 0.86, CH_COL.post);
-    addCircle(C.grid, x, z, 0.5);
-  };
+  const detour = (x, z, ux, uz) => addProp('detour', x, z, -uz, ux, 1.3, 0.45);   // panneau DÉTOUR tourné vers les voitures qui arrivent (sens u)
   const excavator = (x, z, ux, uz, sc = 1) => {   // pelle mécanique jaune
     const y = G(x, z), vx = -uz, vz = ux;
     for (const sg of [-1, 1]) obox(A[KC.plain], x + vx * 1.05 * sg * sc, z + vz * 1.05 * sg * sc, ux, uz, 1.8 * sc, 0.35 * sc, y, y + 0.75 * sc, CH_COL.dark);
@@ -2864,12 +2868,7 @@ function buildChantier(W) {
     const [p0x, p0z] = P(-3.3, 0), [p1x, p1z] = P(3.3, 0);
     addSeg(C.grid, p0x, p0z, p1x, p1z, 1.2);
   };
-  const closedSign = (x, z, ux, uz) => {   // panneau RUE BARRÉE posé sur la barrière, face aux voitures qui arrivent
-    const y = G(x, z), vx = -uz, vz = ux, ox = -ux * 0.06, oz = -uz * 0.06;
-    quad(A[KC.closed], x - vx * 0.8 + ox, y + 1.35, z - vz * 0.8 + oz, x + vx * 0.8 + ox, y + 1.35, z + vz * 0.8 + oz,
-      x + vx * 0.8 + ox, y + 1.85, z + vz * 0.8 + oz, x - vx * 0.8 + ox, y + 1.85, z - vz * 0.8 + oz, -ux, 0, -uz, WHITE);
-    obox(A[KC.plain], x, z, vx, vz, 0.82, 0.025, y + 1.33, y + 1.87, CH_COL.dark);
-  };
+  const closedSign = (x, z, ux, uz) => addProp('closed', x, z, -uz, ux, 1.6, 0.2);   // RUE BARRÉE, face aux voitures qui arrivent
   const trailer = (x, z, ux, uz) => {   // roulotte de chantier
     const y = G(x, z), vx = -uz, vz = ux;
     obox(A[KC.plain], x, z, ux, uz, 3, 1.15, y + 0.35, y + 2.8, CH_COL.trailer, true);
@@ -3017,6 +3016,16 @@ function buildChantier(W) {
   cm.frustumCulled = false;
   C.coneMesh = cm;
   C.group.add(cm);
+  for (const type of Object.keys(PG)) {
+    const list = C.props.filter(q => q.type === type);
+    if (!list.length) continue;
+    const m = new THREE.InstancedMesh(PG[type].geo, undefined, list.length);
+    reg(m, CH_MATS.normal, CH_MATS.retro);
+    m.castShadow = m.receiveShadow = true;
+    m.frustumCulled = false;
+    list.forEach((q, k) => { q.slot = k; q.mesh = m; });
+    C.group.add(m);
+  }
   C.extraAt = (x, z) => {
     let best = -Infinity;
     for (const it of C.jumps.at(x, z)) {
@@ -3094,6 +3103,7 @@ function resetChantier(C) {
   C.moving.length = 0;
   C.coneMesh.instanceMatrix.needsUpdate = true;
   for (const cy of C.cyclists) { cy.stop = 0; cy.wob = 0; cy.hitCd = 0; cy.fly = null; }
+  for (const p of C.props) { p.fly = null; p.item.off = false; setPropMatrix(p); }
 }
 let cyclistHit = false, bellCd = 0, clonkCd = 0;
 function bell() { blip(2350, 2280, 0.12, 'sine', 0.12); blip(2350, 2280, 0.2, 'sine', 0.12, 0.15); }
@@ -3263,6 +3273,170 @@ function updateBlink(t) {                                          // feux clign
   const on = Math.floor(t * 2.4) % 2 === 0;
   blinkMat.emissiveIntensity = on ? 3 : 0.15;
   blinkRetro.color.setRGB(on ? 3 : 0.3, on ? 1.2 : 0.1, on ? 0.1 : 0.02);
+}
+// ---------- Pièces de chantier renversables : clôtures, barrières, panneaux, glissières de béton ----------
+// Chaque pièce est une instance ; percutée, elle s'envole (la glissière, lourde, glisse et bascule).
+let PROP_GEO = null;
+function propGeometries() {
+  if (PROP_GEO) return PROP_GEO;
+  const mk = build => { const A = Array.from({ length: 7 }, acc); build(A); return mergeAccs(A); };
+  PROP_GEO = {
+    jersey: { len: 3, com: 0.4, mass: 900, rFlat: 0.3, geo: mk(A => {
+      obox(A[KC.plain], 0, 0, 1, 0, 1.5, 0.3, -0.2, 0.32, CH_COL.concrete, true);
+      obox(A[KC.plain], 0, 0, 1, 0, 1.5, 0.15, 0.32, 0.84, CH_COL.concrete);
+    }) },
+    barricade: { len: 2.4, com: 0.7, mass: 12, rFlat: 0.1, geo: mk(A => {
+      for (const sg of [-1, 1]) obox(A[KC.plain], 1.2 * sg, 0, 1, 0, 0.05, 0.35, 0, 1.15, CH_COL.white);
+      for (const [y0, y1] of [[0.55, 0.8], [0.88, 1.13]]) for (const sd of [-1, 1]) {
+        const z = 0.04 * sd;
+        quad(A[KC.stripe], -1.2, y0, z, 1.2, y0, z, 1.2, y1, z, -1.2, y1, z, 0, 0, sd, WHITE, 0, 0, 3, 1);
+      }
+      obox(A[KC.light], 1.2, 0, 1, 0, 0.09, 0.09, 1.15, 1.33, WHITE);
+    }) },
+    fence: { len: 3.2, com: 0.95, mass: 28, rFlat: 0.12, geo: mk(A => {         // panneau de clôture sur deux blocs de béton
+      quad(A[KC.fence], -1.6, 0.12, 0, 1.6, 0.12, 0, 1.6, 1.9, 0, -1.6, 1.9, 0, 0, 0, 1, WHITE, 0, 0, 3.2, 1);
+      for (const sg of [-1, 1]) {
+        obox(A[KC.plain], 1.55 * sg, 0, 1, 0, 0.35, 0.18, -0.1, 0.14, CH_COL.concrete);
+        obox(A[KC.plain], 1.55 * sg, 0, 1, 0, 0.03, 0.03, 0.14, 1.95, CH_COL.post);
+      }
+    }) },
+    detour: { len: 1.3, com: 0.9, mass: 9, rFlat: 0.1, geo: mk(A => {
+      quad(A[KC.sign], -0.65, 0.85, 0.03, 0.65, 0.85, 0.03, 0.65, 1.5, 0.03, -0.65, 1.5, 0.03, 0, 0, 1, WHITE);
+      obox(A[KC.plain], 0, 0, 1, 0, 0.68, 0.025, 0.83, 1.52, CH_COL.dark);
+      for (const sg of [-1, 1]) obox(A[KC.plain], 0.55 * sg, 0, 0, 1, 0.3, 0.03, 0, 0.86, CH_COL.post);
+    }) },
+    closed: { len: 1.6, com: 1.1, mass: 9, rFlat: 0.1, geo: mk(A => {
+      quad(A[KC.closed], -0.8, 1.35, 0.03, 0.8, 1.35, 0.03, 0.8, 1.85, 0.03, -0.8, 1.85, 0.03, 0, 0, 1, WHITE);
+      obox(A[KC.plain], 0, 0, 1, 0, 0.82, 0.025, 1.33, 1.87, CH_COL.dark);
+      for (const sg of [-1, 1]) obox(A[KC.plain], 0.62 * sg, 0, 0, 1, 0.25, 0.03, 0, 1.36, CH_COL.post);
+    }) },
+  };
+  return PROP_GEO;
+}
+const _pr1 = new THREE.Matrix4(), _pr2 = new THREE.Matrix4();
+function setPropMatrix(p) {
+  const T = PROP_GEO[p.type];
+  if (p.fly) _pm4.compose(p.fly.p, p.fly.q, ONE).multiply(_pr1.makeTranslation(0, -T.com, 0)).multiply(_pr2.makeScale(p.sx, 1, 1));
+  else _pm4.compose(_pp4.set(p.x, p.y, p.z), _pq4.setFromAxisAngle(Y_AXIS, p.yaw), _ps4.set(p.sx, 1, 1));
+  p.mesh.setMatrixAt(p.slot, _pm4);
+  p.mesh.instanceMatrix.needsUpdate = true;
+}
+// Tout ce qui vole (pièces de chantier, arbres arrachés) : corps rigides qui tournoient, rebondissent et se couchent
+const flyers = [];
+function knockProp(p, vx, vz, power) {
+  const T = PROP_GEO[p.type], heavy = T.mass > 200, rnd = () => Math.random() - 0.5;
+  const sp = Math.hypot(vx, vz) || 1, dx = vx / sp, dz = vz / sp, k = heavy ? 0.5 : 1.05 + Math.random() * 0.3;
+  p.item.off = true;
+  p.fly = {
+    p: new THREE.Vector3(p.x, p.y + T.com, p.z),
+    v: new THREE.Vector3(vx * k + rnd() * 2.5, heavy ? 0.6 + power * 0.06 : 2.4 + power * 0.28 + Math.random() * 2, vz * k + rnd() * 2.5),
+    q: new THREE.Quaternion().setFromAxisAngle(Y_AXIS, p.yaw),
+    w: new THREE.Vector3(dz, 0, -dx).multiplyScalar(heavy ? 1.2 : 3 + power * 0.3).add(new THREE.Vector3(rnd(), rnd(), rnd()).multiplyScalar(heavy ? 1 : 7)),
+    still: false, flat: 'z', rUp: T.com, rFlat: T.rFlat, rad: 0.3, owner: p, apply: setPropMatrix,
+  };
+  flyers.push(p.fly);
+}
+function propSound(type, vn) {
+  if (clonkCd > 0) return;
+  clonkCd = 0.07;
+  const p = clamp(vn / 15, 0.2, 1);
+  if (type === 'fence') { sfxNoise(0.3, 0.3 * p, 'bandpass', 1700, 0, 3); sfxNoise(0.18, 0.2 * p, 'highpass', 4200, 0.04, 2); blip(210, 90, 0.2, 'triangle', 0.2 * p); }
+  else if (type === 'jersey') crashSound(vn * 0.8, 'wall');
+  else { blip(320, 120, 0.14, 'triangle', 0.28 * p); sfxNoise(0.12, 0.22 * p, 'bandpass', 900, 0, 1.5); }
+}
+// Arbres : on peut les arracher en fonçant dedans assez vite (au-delà de ~30 km/h)
+const TREE_COM = 2.7, TREE_BREAK = 8;
+const _tr1 = new THREE.Matrix4(), _tr2 = new THREE.Matrix4();
+function setTreeMatrix(t) {
+  if (t.fly) {
+    _tr2.compose(_pp4.set(0, -TREE_COM * t.s, 0), _pq4.setFromAxisAngle(Y_AXIS, t.rot), _ps4.setScalar(t.s));
+    _tr1.compose(t.fly.p, t.fly.q, ONE).multiply(_tr2);
+  } else _tr1.compose(_pp4.set(t.x, t.y - 0.15, t.z), _pq4.setFromAxisAngle(Y_AXIS, t.rot), _ps4.setScalar(t.s));
+  for (const [im, i] of t.parts) { im.setMatrixAt(i, _tr1); im.instanceMatrix.needsUpdate = true; }
+}
+function knockTree(t, vn, vx = car.vx, vz = car.vz) {
+  const sp = Math.hypot(vx, vz) || 1, dx = vx / sp, dz = vz / sp, rnd = () => Math.random() - 0.5;
+  t.item.off = true;
+  t.fly = {
+    p: new THREE.Vector3(t.x, t.y - 0.15 + TREE_COM * t.s, t.z),
+    v: new THREE.Vector3(vx * 0.6 + rnd(), 1.8 + vn * 0.22, vz * 0.6 + rnd()),
+    q: new THREE.Quaternion(),
+    w: new THREE.Vector3(dz, 0, -dx).multiplyScalar(1.4 + vn * 0.12).add(new THREE.Vector3(rnd(), 0, rnd()).multiplyScalar(1.2)),
+    still: false, flat: 'y', rUp: TREE_COM * t.s, rFlat: 1.2 * t.s, rad: 0.7 * t.s, owner: t, apply: setTreeMatrix,
+  };
+  flyers.push(t.fly);
+  (world.knockedTrees ||= []).push(t);
+  noteCrash(t.x, t.y + 3 * t.s, t.z, vn, 'tree', t.col || null);
+}
+// la voiture enfonce une pièce de chantier ou arrache un arbre au lieu de s'y arrêter
+function breakThrough(it, nx, nz) {
+  const vn = -(car.vx * nx + car.vz * nz);
+  if (it.prop) {
+    const heavy = PROP_GEO[it.prop.type].mass > 200;
+    if (vn < (heavy ? 7 : 1.2)) return false;
+    knockProp(it.prop, car.vx, car.vz, vn);
+    const keep = heavy ? 0.72 : 0.95;
+    car.vx *= keep; car.vz *= keep;
+    propSound(it.prop.type, vn);
+    return true;
+  }
+  if (vn < TREE_BREAK) return false;
+  knockTree(it.tree, vn);
+  car.vx *= 0.72; car.vz *= 0.72;
+  hitImpulse = Math.max(hitImpulse, vn * 0.5);
+  return true;
+}
+const _ta = new THREE.Vector3(), _tb = new THREE.Vector3(), _tq = new THREE.Quaternion();
+function tumble(B, dt) {
+  if (B.still) return;
+  B.v.y -= FLY_G * dt;
+  B.p.addScaledVector(B.v, dt);
+  const wl = B.w.length();
+  if (wl > 1e-3) { _tq.setFromAxisAngle(_ta.copy(B.w).multiplyScalar(1 / wl), wl * dt); B.q.premultiply(_tq); }
+  const items = world.grid.at(B.p.x, B.p.z);                          // murs et façades : rebond
+  for (let n = 0; n < items.length; n++) {
+    const it = items[n];
+    if (it.off) continue;
+    let px = it.x, pz = it.z;
+    if (it.seg) {
+      const dx = it.bx - it.ax, dz = it.bz - it.az, t = clamp(((B.p.x - it.ax) * dx + (B.p.z - it.az) * dz) / (dx * dx + dz * dz || 1e-9), 0, 1);
+      px = it.ax + dx * t; pz = it.az + dz * t;
+    }
+    const ex = B.p.x - px, ez = B.p.z - pz, rr = it.r + B.rad, d2 = ex * ex + ez * ez;
+    if (d2 >= rr * rr || d2 < 1e-10) continue;
+    const d = Math.sqrt(d2), nx = ex / d, nz = ez / d, vn = B.v.x * nx + B.v.z * nz;
+    B.p.x += nx * (rr - d); B.p.z += nz * (rr - d);
+    if (vn < 0) { B.v.x -= 1.4 * vn * nx; B.v.z -= 1.4 * vn * nz; B.w.multiplyScalar(0.7); }
+  }
+  // hauteur du centre au-dessus du sol : debout ou couché selon l'orientation
+  _ta.set(0, B.flat === 'z' ? 0 : 1, B.flat === 'z' ? 1 : 0).applyQuaternion(B.q);
+  const a2 = _ta.y * _ta.y, R = B.flat === 'z' ? lerp(B.rUp, B.rFlat, a2) : lerp(B.rFlat, B.rUp, a2);
+  const g = world.ground(B.p.x, B.p.z);
+  if (B.p.y - R >= g) return;
+  B.p.y = g + R;
+  if (B.v.y < -2.2) {
+    if (B.v.y < -5) blip(110, 45, 0.2, 'sine', Math.min(0.28, -B.v.y * 0.025));
+    B.v.y *= -0.3; B.v.x *= 0.6; B.v.z *= 0.6; B.w.multiplyScalar(0.55);
+    return;
+  }
+  B.v.y = 0;
+  const hs = Math.hypot(B.v.x, B.v.z);
+  if (hs > 1e-4) { const k = Math.max(0, hs - 9 * dt) / hs; B.v.x *= k; B.v.z *= k; }
+  B.w.multiplyScalar(Math.exp(-8 * dt));
+  if (B.flat === 'z') _tb.set(0, _ta.y >= 0 ? 1 : -1, 0);             // panneau : à plat
+  else { _tb.set(_ta.x, 0, _ta.z); if (_tb.lengthSq() < 1e-4) _tb.set(1, 0, 0); _tb.normalize(); }   // arbre : couché
+  const settled = _ta.dot(_tb) > 0.995;
+  _tq.setFromUnitVectors(_ta, _tb).multiply(B.q);
+  B.q.slerp(_tq, 1 - Math.exp(-6 * dt));
+  if (settled && hs < 0.05 && B.w.lengthSq() < 0.01) B.still = true;
+}
+function updateFlyers(dt) {
+  for (let i = flyers.length - 1; i >= 0; i--) {
+    const B = flyers[i];
+    tumble(B, dt);
+    B.apply(B.owner);
+    if (B.still) flyers.splice(i, 1);
+  }
 }
 function updateChantier(C, dt, t) {
   const G = world.ground;
@@ -3615,6 +3789,106 @@ function flushParked(W) {
   W.parked.dirty.clear();
 }
 
+// ---------- Nitro : bonbonnes bleues dans les rues (3 charges au plus), N ou Maj pour les utiliser ----------
+const NITRO_GEO = mergeParts([
+  { geo: new THREE.CylinderGeometry(0.34, 0.34, 1.05, 16), color: col3(0x1d62d6) },
+  { geo: new THREE.CylinderGeometry(0.346, 0.346, 0.18, 16).translate(0, 0.16, 0), color: col3(0xf2f4f7) },
+  { geo: new THREE.SphereGeometry(0.34, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2).translate(0, 0.525, 0), color: col3(0x1d62d6) },
+  { geo: new THREE.CylinderGeometry(0.08, 0.1, 0.22, 10).translate(0, 0.95, 0), color: col3(0xc9ced6) },
+  { geo: new THREE.CylinderGeometry(0.15, 0.15, 0.06, 12).translate(0, 1.07, 0), color: col3(0xe23b3b) },
+]);
+const NITRO_MATS = {
+  body: { normal: new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.55, roughness: 0.25, emissive: 0x0b2f6b, emissiveIntensity: 0.7 }), retro: basic(hdr(1.5, 1.5, 1.5), { vertexColors: true }) },
+  ring: {
+    normal: basic(hdr(0.5, 1.4, 2.6), { transparent: true, opacity: 0.55, depthWrite: false, blending: THREE.AdditiveBlending, ...offset(-4) }),
+    retro: basic(hdr(0.4, 1.8, 3), { transparent: true, opacity: 0.8, depthWrite: false, blending: THREE.AdditiveBlending, ...offset(-4) }),
+  },
+};
+const NITRO_RING = new THREE.RingGeometry(0.75, 1.1, 28).rotateX(-Math.PI / 2);
+const NITRO_BEAM = new THREE.CylinderGeometry(0.09, 0.09, 16, 6, 1, true).translate(0, 8, 0);
+const NITRO_BEAM_MATS = { normal: basic(0x58b8ff, { transparent: true, opacity: 0.28, depthWrite: false }), retro: basic(hdr(0.3, 1.5, 2.6), { transparent: true, opacity: 0.35, depthWrite: false }) };
+function addNitros(W, n) {
+  seed = 777 + W.id.length * 31;
+  const cands = [];
+  for (const way of W.roadWays) {
+    if (way.k > 1) continue;
+    for (let i = 0; i < way.pts.length - 1; i++) {
+      const [ax, az] = way.pts[i], [bx, bz] = way.pts[i + 1], L = Math.hypot(bx - ax, bz - az);
+      for (let d = 8; d < L - 8; d += 18) {
+        const x = ax + (bx - ax) * d / L, z = az + (bz - az) * d / L;
+        if (!W.inRegion || W.inRegion(x, z, -10)) cands.push([x, z]);
+      }
+    }
+  }
+  const avoid = [[W.spawn.x, W.spawn.z, 45], ...W.coins.map(c => [c.x, c.z, 22])];
+  const pool = cands.filter(([x, z]) => avoid.every(([ax, az, r]) => (x - ax) ** 2 + (z - az) ** 2 > r * r));
+  const picks = [], dmin = new Float64Array(pool.length).fill(Infinity);
+  if (pool.length) picks.push(pool[Math.floor(rand() * pool.length)]);
+  while (picks.length < Math.min(n, pool.length)) {                    // bien réparties : le plus loin des autres
+    const [px, pz] = picks[picks.length - 1];
+    let bi = 0, bd = -1;
+    for (let i = 0; i < pool.length; i++) {
+      const d = (pool[i][0] - px) ** 2 + (pool[i][1] - pz) ** 2;
+      if (d < dmin[i]) dmin[i] = d;
+      if (dmin[i] > bd) { bd = dmin[i]; bi = i; }
+    }
+    picks.push(pool[bi]);
+  }
+  const body = new THREE.InstancedMesh(NITRO_GEO, undefined, Math.max(1, picks.length));
+  const ring = new THREE.InstancedMesh(NITRO_RING, undefined, Math.max(1, picks.length));
+  const beam = new THREE.InstancedMesh(NITRO_BEAM, undefined, Math.max(1, picks.length));
+  reg(body, NITRO_MATS.body.normal, NITRO_MATS.body.retro);
+  reg(ring, NITRO_MATS.ring.normal, NITRO_MATS.ring.retro);
+  reg(beam, NITRO_BEAM_MATS.normal, NITRO_BEAM_MATS.retro);
+  body.castShadow = true;
+  for (const m of [body, ring, beam]) { m.frustumCulled = false; m.count = picks.length; W.group.add(m); }
+  W.nitros = { body, ring, beam, list: picks.map(([x, z], i) => ({ i, x, z, y: W.ground(x, z), ph: rand() * 6.28, taken: false, t: 0 })) };
+}
+function takeNitro(n) {
+  n.taken = true; n.t = 30;                                           // elle réapparaît au bout de 30 s
+  for (const m of [world.nitros.body, world.nitros.ring, world.nitros.beam]) m.setMatrixAt(n.i, ZERO_M);
+  car.nitro = Math.min(NITRO_CAP, car.nitro + 1);
+  blip(520, 1560, 0.22, 'sawtooth', 0.06); blip(780, 2340, 0.18, 'square', 0.05, 0.08);
+  toast(car.nitro === NITRO_CAP ? 'Nitro plein ! · N pour l’utiliser' : `Nitro ${car.nitro}/${NITRO_CAP} · N pour l’utiliser`, 1300);
+}
+function updateNitros(dt, t) {
+  const N = world.nitros;
+  if (!N) return;
+  for (const n of N.list) {
+    if (n.taken) { n.t -= dt; if (n.t > 0) continue; n.taken = false; }
+    const y = n.y + 1.15 + Math.sin(t * 2.2 + n.ph) * 0.18;
+    N.body.setMatrixAt(n.i, _pm4.compose(_pp4.set(n.x, y, n.z), _pq4.setFromAxisAngle(Y_AXIS, t * 1.8 + n.ph), ONE));
+    N.ring.setMatrixAt(n.i, _pm4.compose(_pp4.set(n.x, n.y + 0.06, n.z), _pq4.identity(), _ps4.setScalar(1 + Math.sin(t * 4 + n.ph) * 0.08)));
+    N.beam.setMatrixAt(n.i, _pm4.compose(_pp4.set(n.x, n.y, n.z), _pq4.identity(), ONE));
+    if (state === 'play' && car.nitro < NITRO_CAP && Math.abs(n.x - car.pos.x) < 2.8 && Math.abs(n.z - car.pos.z) < 2.8 &&
+      Math.hypot(n.x - car.pos.x, n.z - car.pos.z) < 2.6 && car.pos.y < y + 1.5) takeNitro(n);
+  }
+  N.body.instanceMatrix.needsUpdate = N.ring.instanceMatrix.needsUpdate = N.beam.instanceMatrix.needsUpdate = true;
+}
+function fireNitro() {
+  if (state !== 'play' || car.boost > 0) return;
+  if (car.nitro <= 0) { toast('Plus de nitro : ramasse les bonbonnes bleues', 1300); return; }
+  car.nitro--;
+  car.boost = NITRO_TIME;
+  sfxNoise(1.3, 0.35, 'bandpass', 700, 0, 0.6); sfxNoise(0.5, 0.22, 'highpass', 2500, 0, 0.8); blip(90, 360, 0.7, 'sawtooth', 0.12);
+  if (!reduceMotion) shake = Math.max(shake, 0.18);
+}
+// flammes bleues et orange aux deux pots d'échappement pendant le boost
+const flames = (() => {
+  const g = new THREE.Group(), parts = [];
+  const geo = new THREE.ConeGeometry(0.2, 1.6, 12, 1, true).rotateX(-Math.PI / 2).translate(0, 0, -0.8);
+  const outer = basic(hdr(1.5, 0.45, 0.08), { transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+  const inner = basic(hdr(0.35, 0.75, 1.9), { transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+  for (const x of [0.42, -0.42]) {
+    const o = new THREE.Mesh(geo, outer), c = new THREE.Mesh(geo, inner);
+    o.position.set(x, 0.3, -1.99); c.position.set(x, 0.3, -1.99); c.scale.set(0.55, 0.55, 0.6);
+    g.add(o, c); parts.push(o, c);
+  }
+  g.visible = false;
+  carObj.root.add(g);
+  return { g, parts };
+})();
+
 // ---------- Traces de pneus (lumineuses en mode années 80) ----------
 const SKID_MAX = 1200;
 const skids = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.3, 1).rotateX(-Math.PI / 2), undefined, SKID_MAX);
@@ -3660,6 +3934,7 @@ const car = {
   vx: 0, vz: 0, vy: 0, yawRate: 0, steer: 0,
   spin: 0,                               // rotation reçue d'un choc (tête-à-queue)
   slip: 0,                               // perte d'adhérence après un gros choc (s)
+  nitro: 1, boost: 0,                    // charges de nitro, temps de boost restant (s)
   grounded: true, airTime: 0,
 };
 const CAR_M = 1200, CAR_I = (CAR_M * (3.95 ** 2 + 1.78 ** 2)) / 12;
@@ -3694,6 +3969,7 @@ function collideGrid(grid, fx, fz, off) {
     if (ex > rr || ex < -rr || ez > rr || ez < -rr) continue;
     const d = Math.hypot(ex, ez);
     if (d >= rr || d < 1e-6) continue;
+    if ((it.prop || it.tree) && breakThrough(it, ex / d, ez / d)) continue;
     pushCar(ex / d, ez / d, rr - d);
   }
 }
@@ -3817,6 +4093,11 @@ function parkedVsWorld(v) {
         const ex = cx - px, ez = cz - pz, rr = it.r + v.r, d2 = ex * ex + ez * ez;
         if (d2 >= rr * rr || d2 < 1e-10) continue;
         const d = Math.sqrt(d2), nx = ex / d, nz = ez / d;
+        if (it.prop || it.tree) {                                      // une voiture projetée renverse aussi clôtures et arbres
+          const vn = -(v.vx * nx + v.vz * nz);
+          if (it.prop && vn > 1.5) { knockProp(it.prop, v.vx, v.vz, vn); propSound(it.prop.type, vn); v.vx *= 0.9; v.vz *= 0.9; continue; }
+          if (it.tree && vn > TREE_BREAK + 1) { knockTree(it.tree, vn, v.vx, v.vz); v.vx *= 0.6; v.vz *= 0.6; continue; }
+        }
         v.x += nx * (rr - d); v.z += nz * (rr - d);
         const hit = contactImpulse(v, STATIC_BODY, nx, nz, cx - nx * v.r, cz - nz * v.r, 0.2, 0.4);
         if (hit > 4) noteCrash(cx - nx * v.r, world.ground(cx, cz) + 0.7, cz - nz * v.r, hit * 0.6, 'wall', v.color);
@@ -3877,7 +4158,8 @@ scene.add(debrisMesh);
 const debris = new Array(DEBRIS_MAX).fill(null);
 let debrisHead = 0;
 const GLASS_BITS = col3(0xcfe6ef), PLASTIC_BITS = col3(0x1c1d20);
-function spawnDebris(x, y, z, n, power, color) {
+const BARK_BITS = col3(0x6b4a2e);
+function spawnDebris(x, y, z, n, power, color, mono = false) {
   for (let k = 0; k < n; k++) {
     const i = debrisHead, kind = k % 3, a = Math.random() * Math.PI * 2, sp = (0.4 + Math.random()) * (1.5 + power * 0.25);
     debrisHead = (debrisHead + 1) % DEBRIS_MAX;
@@ -3886,7 +4168,7 @@ function spawnDebris(x, y, z, n, power, color) {
       rx: Math.random() * 6, ry: Math.random() * 6, sx: (Math.random() - 0.5) * 20, sy: (Math.random() - 0.5) * 20, life: 5 + Math.random() * 3,
       s: kind === 0 ? [0.07, 0.02, 0.06] : kind === 1 ? [0.16, 0.03, 0.1] : [0.22, 0.02, 0.15],
     };
-    debrisMesh.setColorAt(i, kind === 0 ? GLASS_BITS : kind === 1 || !color ? PLASTIC_BITS : color);
+    debrisMesh.setColorAt(i, mono ? (k % 4 === 0 ? BARK_BITS : color || BARK_BITS) : kind === 0 ? GLASS_BITS : kind === 1 || !color ? PLASTIC_BITS : color);
   }
   debrisMesh.instanceColor.needsUpdate = true;
 }
@@ -3962,6 +4244,8 @@ function resetCrashes() {
   debrisMesh.instanceMatrix.needsUpdate = true;
   hazard.count = 0;
   crash = null;
+  if (world.resetTrees) world.resetTrees();
+  flyers.length = 0;
 }
 
 function wallBounce(ox, oz) {
@@ -3993,6 +4277,8 @@ function stepCar(dt, inp) {
       else if (vf > -REVERSE_MAX) vf -= REVERSE_ACC * dt;
     }
     if (!inp.throttle && !inp.brake) vf = moveTowards(vf, 0, (1.2 + Math.abs(vf) * 0.12) * dt);
+    if (car.boost > 0 && !wet) vf = Math.min(NITRO_MAX_SPEED, Math.max(vf, 0) + NITRO_ACC * dt);   // nitro
+    else if (vf > top + 0.3) vf = moveTowards(vf, top, 7 * dt);         // après le nitro, on revient à la vitesse max
     if (inp.handbrake) vf = moveTowards(vf, 0, 7 * dt);
     vf -= vf * 0.04 * dt;
     if (wet) vf *= Math.exp(-1.5 * dt);
@@ -4005,8 +4291,10 @@ function stepCar(dt, inp) {
     car.yawRate = yr;
   } else {
     car.yawRate = lerp(car.yawRate, car.steer * 1.3, 1 - Math.exp(-3 * dt));
+    if (car.boost > 0) vf = Math.min(NITRO_MAX_SPEED, vf + NITRO_ACC * 0.5 * dt);   // en l'air, la fusée pousse encore
   }
 
+  car.boost = Math.max(0, car.boost - dt);
   const dYaw = car.yawRate * dt;
   car.yaw += dYaw + car.spin * dt;
   car.spin *= Math.exp(-(car.grounded ? 2.8 : 0.4) * dt);
@@ -4146,7 +4434,9 @@ function crashSound(power, kind) {
   sfxNoise(0.28 + p * 0.25, 0.45 * p, 'lowpass', 700 + p * 900, 0, 0.8);
   sfxNoise(0.12, 0.25 * p, 'bandpass', 2400, 0.02, 2);
   blip(95, 38, 0.3 + p * 0.2, 'sine', 0.55 * p);
-  if (kind === 'bike') {
+  if (kind === 'tree') {                                           // bois qui craque
+    sfxNoise(0.07, 0.35, 'highpass', 2600, 0.02, 2); sfxNoise(0.06, 0.3, 'highpass', 2200, 0.12, 2); blip(70, 32, 0.5, 'sine', 0.45 * p);
+  } else if (kind === 'bike') {
     for (let k = 0; k < 4; k++) sfxNoise(0.06, 0.2, 'highpass', 3000 + k * 700, 0.03 + k * 0.07, 4);
     blip(2350, 1700, 0.35, 'triangle', 0.08, 0.04);
   } else if (p > 0.4) for (let k = 0; k < 5; k++) sfxNoise(0.07, 0.12 * p, 'highpass', 5200 + Math.random() * 2500, 0.05 + Math.random() * 0.3, 3);
@@ -4157,11 +4447,12 @@ function updateAudio(inp, drifting) {
   const vf = Math.abs(car.vx * Math.sin(car.yaw) + car.vz * Math.cos(car.yaw));
   const s = Math.min(1, vf / MAX_SPEED);
   const gp = s * 4.2, gear = Math.floor(gp), within = gp - gear;   // rapports de boîte simulés
-  const f = 55 + within * 75 + gear * 12 + inp.throttle * 8;
+  const bst = car.boost > 0 ? 1 : 0;
+  const f = 55 + within * 75 + gear * 12 + inp.throttle * 8 + bst * 30;
   audio.o1.frequency.setTargetAtTime(f, t, 0.04);
   audio.o2.frequency.setTargetAtTime(f * 0.5, t, 0.04);
-  audio.filter.frequency.setTargetAtTime(500 + s * 1500 + inp.throttle * 300, t, 0.08);
-  audio.eng.gain.setTargetAtTime(state === 'menu' ? 0 : (0.05 + inp.throttle * 0.06) * (ducking ? 0.35 : 1), t, 0.1);
+  audio.filter.frequency.setTargetAtTime(500 + s * 1500 + inp.throttle * 300 + bst * 1800, t, 0.08);
+  audio.eng.gain.setTargetAtTime(state === 'menu' ? 0 : (0.05 + inp.throttle * 0.06 + bst * 0.05) * (ducking ? 0.35 : 1), t, 0.1);
   audio.music.gain.setTargetAtTime(ducking ? 0.3 : 0.9, t, 0.15);
   audio.skidG.gain.setTargetAtTime(drifting ? 0.12 : 0, t, 0.05);
   scheduleMusic();
@@ -4227,7 +4518,7 @@ const el = {
   best: $('best'), bestK: $('best-k'), toast: $('toast'), sound: $('sound-label'),
   menu: $('menu'), win: $('win'), winTime: $('win-time'), winBest: $('win-best'), winLede: $('win-lede'),
   menuNote: $('menu-note'), mapNote: $('map-note'), route: $('menu-route'), eyebrow: $('menu-eyebrow'), count: $('menu-count'),
-  start: $('btn-start'), newGame: $('btn-new'),
+  start: $('btn-start'), newGame: $('btn-new'), nitro: $('nitro'),
 };
 el.sound.textContent = muted ? 'Son : non' : 'Son : oui';
 const setText = (e, v) => { v = String(v); if (e._v !== v) { e.textContent = v; e._v = v; } };
@@ -4377,7 +4668,7 @@ for (const [id, rw] of Object.entries(REAL_WORLDS)) {
   WORLD_INFO[id].note = `Données introuvables : lance « node tools/build-city.mjs » pour générer ${rw.file}.`;
 }
 const available = id => id === 'invente' || !!(REAL_WORLDS[id] && REAL_WORLDS[id].data()?.roads);
-const MODE_NOTE = 'Mode Chantiers : des cônes orange partout (fonce dedans !), glissières, clôtures, barrières clignotantes, pelles mécaniques, bosses de terre et tremplins, et des cyclistes sur toutes les pistes cyclables et dans les rues. Un cycliste percuté s’envole avec son vélo, et ça coûte 5 secondes.';
+const MODE_NOTE = 'Mode Chantiers : des cônes orange, des clôtures et des barrières clignotantes partout (fonce dedans, tout ça s’envole), pelles mécaniques, bosses de terre et tremplins, et des cyclistes sur toutes les pistes cyclables et dans les rues. Un cycliste percuté s’envole avec son vélo, et ça coûte 5 secondes.';
 
 let state = 'menu';             // menu | play | won
 let gameActive = false;         // une partie est en cours (menu = pause)
@@ -4443,6 +4734,8 @@ function resetRun() {
   for (const c of world.coins) { c.taken = false; c.mesh.visible = true; c.beam.visible = true; }
   collected = 0;
   elapsed = 0;
+  car.nitro = 1; car.boost = 0;
+  if (world.nitros) for (const n of world.nitros.list) { n.taken = false; n.t = 0; }
   if (world.siteOn) resetChantier(world.site);
   resetCrashes();
   respawn(false);
@@ -4599,6 +4892,7 @@ addEventListener('keydown', e => {
   else if (k === 'r') { respawn(true); toast('Voiture replacée', 900); }
   else if (k === 'm') toggleMute();
   else if (k === 'v') setVoice(!voiceOn, true);
+  else if (k === 'n' || e.code === 'ShiftLeft' || e.code === 'ShiftRight') fireNitro();
 });
 addEventListener('keyup', e => keys.delete(e.code));
 addEventListener('blur', () => keys.clear());
@@ -4611,6 +4905,7 @@ onButton('btn-free', () => { el.win.hidden = true; canvas.focus({ preventScroll:
 onButton('btn-cam', cycleCam);
 onButton('btn-sound', () => { initAudio(); toggleMute(); });
 onButton('btn-menu', openMenu);
+$('btn-nitro').addEventListener('pointerdown', e => { e.preventDefault(); initAudio(); fireNitro(); });
 document.querySelectorAll('input[name="map"]').forEach(r => r.addEventListener('change', () => selectWorld(r.value)));
 document.querySelectorAll('input[name="style"]').forEach(r => r.addEventListener('change', () => setStyle(r.value)));
 document.querySelectorAll('input[name="mode"]').forEach(r => r.addEventListener('change', () => setMode(r.value)));
@@ -4658,6 +4953,15 @@ function drawMinimap() {
     const dx = x - MM / 2, dy = y - MM / 2, d = Math.hypot(dx, dy), lim = MM / 2 - 8;
     if (d > lim) { x = MM / 2 + (dx / d) * lim; y = MM / 2 + (dy / d) * lim; r = 3.2; }
     g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill(); g.stroke();
+  }
+  if (world.nitros) {
+    g.fillStyle = pal.nitro;
+    for (const n of world.nitros.list) {
+      if (n.taken) continue;
+      const x = MM / 2 - (n.x - cx) * s, y = MM / 2 - (n.z - cz) * s;
+      if (Math.hypot(x - MM / 2, y - MM / 2) > MM / 2 - 6) continue;
+      g.beginPath(); g.arc(x, y, 3.4, 0, Math.PI * 2); g.fill();
+    }
   }
   if (m.follow && world.credit) {
     g.font = '600 13px system-ui, sans-serif'; g.textAlign = 'center'; g.fillStyle = pal.text;
@@ -4718,6 +5022,11 @@ function updateCarVisual(dt, inp) {
     if (w.front) w.pivot.rotation.y = car.steer * 0.5;
   }
   carObj.tail.emissiveIntensity = inp.brake && vf > 0.5 ? 3 : 0.6;
+  flames.g.visible = car.boost > 0;
+  if (car.boost > 0) {
+    const k = Math.min(1, car.boost / 0.3);
+    flames.parts.forEach((m, i) => { m.scale.z = (i % 2 ? 0.7 : 1.15) * (0.75 + Math.random() * 0.5) * (0.35 + k * 0.9); });
+  }
 
   const vl = car.vx * rx + car.vz * rz;
   const speed = Math.hypot(car.vx, car.vz);
@@ -4750,7 +5059,7 @@ function updateEvents(t) {
     if (t - lastCrash > 0.18 || c.power > lastCrashP * 1.5) {
       lastCrash = t; lastCrashP = c.power;
       crashSound(c.power, c.kind);
-      if (c.kind !== 'wall' || c.power > 5) spawnDebris(c.x, c.y, c.z, Math.round(clamp(c.power * (c.kind === 'bike' ? 0.5 : 1.3), 4, 26)), c.power, c.color);
+      if (c.kind !== 'wall' || c.power > 5) spawnDebris(c.x, c.y, c.z, Math.round(clamp(c.power * (c.kind === 'bike' ? 0.5 : 1.3), 4, 26)), c.power, c.color, c.kind === 'tree');
       if (!reduceMotion && c.kind !== 'wall') shake = Math.max(shake, Math.min(0.7, c.power * 0.04));
       if (c.kind === 'car' && c.power > 9 && state === 'play') toast('Bang !', 700);
     }
@@ -4779,7 +5088,7 @@ function updateCamera(dt, t) {
     return;
   }
   const speed = Math.hypot(car.vx, car.vz);
-  camera.fov = lerp(camera.fov, 62 + Math.min(1, speed / MAX_SPEED) * 14, 1 - Math.exp(-3 * dt));
+  camera.fov = lerp(camera.fov, 62 + Math.min(1, speed / MAX_SPEED) * 14 + (car.boost > 0 ? 9 : 0), 1 - Math.exp(-3 * dt));
   camera.updateProjectionMatrix();
   if (camMode === 2) {
     camera.position.set(0, 1.2, 0.05);
@@ -4833,6 +5142,12 @@ function updateHUD(dt) {
   setText(el.speed2, `${kmh} km/h`);
   setText(el.coins, `${collected} / ${world.coins.length}`);
   setText(el.time, fmt(elapsed));
+  const nk = car.nitro * 2 + (car.boost > 0 ? 1 : 0);
+  if (el.nitro._k !== nk) {
+    el.nitro._k = nk;
+    [...el.nitro.children].forEach((b, i) => b.classList.toggle('on', i < car.nitro));
+    el.nitro.classList.toggle('boost', car.boost > 0);
+  }
   updateStreetSign(dt);
 }
 
@@ -4885,6 +5200,8 @@ function frame() {
   updateDebris(dt);
   updateEvents(t);
   updateCoins(t);
+  updateNitros(dt, t);
+  updateFlyers(dt);
   updateCamera(dt, t);
   updateWorld(dt);
   updateAudio(inp, drifting);
