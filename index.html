@@ -2685,6 +2685,7 @@ function buildInventedWorld() {
   const spots = invCoinSpots();
   addCoins(W, spots);
   W.roadGrid = roadGrid;
+  buildRoadGraph(W);
   parkVehicles(W, 320, 0.35);
   addNitros(W, 12);
 
@@ -3123,6 +3124,7 @@ function buildRealWorld(id, D, cityStyle) {
   }
   plantTrees(W, trees);
   addCoins(W, D.coins);
+  buildRoadGraph(W);
   parkVehicles(W, id === 'plateau' ? 2200 : 800, id === 'plateau' ? 0.5 : 0.4);
   addNitros(W, id === 'plateau' ? 30 : 16);
 
@@ -3469,7 +3471,7 @@ function buildChantier(W) {
   if (W.parked) for (const s of sites) {
     for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) for (const i of W.parked.grid.at(s.x + di * 24, s.z + dj * 24)) {
       const p = W.parked.list[i];
-      if (Math.hypot(p.x - s.x, p.z - s.z) < (s.hideR || 16)) C.hideCars.add(i);
+      if (!p.ai && Math.hypot(p.x - s.x, p.z - s.z) < (s.hideR || 16)) C.hideCars.add(i);
     }
   }
   // cônes semés un peu partout au bord des rues
@@ -3562,6 +3564,7 @@ function buildChantier(W) {
     });
   }
   C.sites = sites.length;
+  C.siteList = sites.filter(q => q.type !== 'lane').map(q => ({ x: q.x, z: q.z, r: (q.hideR || 16) + 5 }));
   resetChantier(C);
   return C;
 }
@@ -4025,7 +4028,16 @@ const VEHICLES = {
   van:    { L: 5.1, W: 1.98, belt: 1.02, H: 1.86, wr: 0.36, wb: 3.0, nose: 0.82, zw: 1.62, zrf: 1.02, zrr: -2.4, zb: -2.5 },
   pickup: { L: 5.6, W: 2.02, belt: 1.15, H: 1.92, wr: 0.4, wb: 3.5, nose: 0.95, zw: 1.3, zrf: 0.7, zrr: -0.4, zb: -0.5, bed: -2.75 },
   truck:  { L: 7.2, W: 2.35, belt: 1.35, H: 2.6, wr: 0.46, wb: 4.3, nose: 1.2, zw: 3.35, zrf: 2.95, zrr: 1.75, zb: 1.7, box: 3.3 },
+  // chars d'époque
+  beetle:   { L: 4.08, W: 1.55, belt: 0.84, H: 1.5, wr: 0.33, wb: 2.4, nose: 0.68, zw: 0.42, zrf: -0.05, zrr: -0.9, zb: -1.62, chrome: true },   // Coccinelle 1965
+  muscle:   { L: 4.75, W: 1.86, belt: 0.84, H: 1.3, wr: 0.36, wb: 2.75, nose: 0.72, zw: 0.62, zrf: -0.25, zrr: -1.15, zb: -2.2, chrome: true, stripes: true },   // fastback 1969
+  wagon:    { L: 5.45, W: 2.0, belt: 0.96, H: 1.46, wr: 0.36, wb: 3.1, nose: 0.74, zw: 1.3, zrf: 0.8, zrr: -2.45, zb: -2.62, chrome: true, wood: true },   // familiale 1974
+  cadillac: { L: 5.7, W: 2.03, belt: 0.9, H: 1.4, wr: 0.36, wb: 3.3, nose: 0.72, zw: 1.1, zrf: 0.5, zrr: -1.05, zb: -1.6, chrome: true, fins: true },   // 1962, à ailerons
+  sport:    { L: 4.45, W: 1.96, belt: 0.78, H: 1.16, wr: 0.35, wb: 2.62, nose: 0.55, zw: 0.62, zrf: -0.35, zrr: -1.25, zb: -1.95 },
 };
+VEHICLES.taxi = { ...VEHICLES.sedan, taxi: true };
+VEHICLES.police = { ...VEHICLES.sedan, police: true };
+const CHROME = col3(0xc9ced4);
 const GLASS_COL = col3(0x1e2a36), BUMPER_COL = col3(0x2a2d31);
 function vehicleShapes(v) {
   const hl = v.L / 2, zf = v.wb / 2, zr = -v.wb / 2, ar = v.wr + 0.06, yb = 0.3;
@@ -4074,8 +4086,23 @@ function vehicleParts(type, fine) {
       detail.push({ geo: new THREE.CylinderGeometry(v.wr * 0.6, v.wr * 0.6, 0.235, 7).rotateZ(Math.PI / 2).translate(sx * (xw - 0.13), v.wr, z), color: col3(0xb9bec4) });
     }
   }
-  detail.push({ geo: box(v.W + 0.04, 0.2, 0.16, 0, 0.42, hl - 0.02), color: BUMPER_COL });                  // pare-chocs
-  detail.push({ geo: box(v.W + 0.04, 0.2, 0.16, 0, 0.42, -hl + 0.02), color: BUMPER_COL });
+  const bump = v.chrome ? CHROME : BUMPER_COL;
+  detail.push({ geo: box(v.W + 0.04, 0.2, 0.16, 0, 0.42, hl - 0.02), color: bump });                        // pare-chocs (chromés sur les chars d'époque)
+  detail.push({ geo: box(v.W + 0.04, 0.2, 0.16, 0, 0.42, -hl + 0.02), color: bump });
+  if (v.fins) for (const sx of [-1, 1]) paint.push({ geo: box(0.08, 0.3, 1.4, sx * (xw - 0.07), v.belt + 0.08, -hl + 0.75), color: W1 });   // ailerons
+  if (v.stripes) for (const sx of [-1, 1]) {                                                               // bandes de course
+    detail.push({ geo: box(0.17, 0.02, hl - v.zw - 0.1, sx * 0.17, v.belt + 0.03, (hl + v.zw) / 2 - 0.1), color: WHITE });
+    detail.push({ geo: box(0.17, 0.02, v.zrf - v.zrr, sx * 0.17, v.H + 0.04, (v.zrf + v.zrr) / 2), color: WHITE });
+  }
+  if (v.wood) for (const sx of [-1, 1]) {                                                                  // panneaux de bois
+    detail.push({ geo: box(0.02, 0.34, v.L * 0.76, sx * (xw + 0.01), v.belt - 0.28, -0.15), color: col3(0x7a4a24) });
+    detail.push({ geo: box(0.025, 0.04, v.L * 0.76, sx * (xw + 0.012), v.belt - 0.1, -0.15), color: col3(0xd8b27a) });
+  }
+  if (v.taxi) detail.push({ geo: box(0.78, 0.22, 0.3, 0, v.H + 0.13, (v.zrf + v.zrr) / 2), color: col3(0xf4d23a) });   // dôme TAXI
+  if (v.police) {                                                                                           // gyrophares
+    detail.push({ geo: box(0.55, 0.14, 0.28, 0.3, v.H + 0.08, (v.zrf + v.zrr) / 2), color: col3(0xd62f2f) });
+    detail.push({ geo: box(0.55, 0.14, 0.28, -0.3, v.H + 0.08, (v.zrf + v.zrr) / 2), color: col3(0x1f5fd6) });
+  }
   detail.push({ geo: box(v.W * 0.42, 0.13, 0.04, 0, v.nose - 0.2, hl + 0.05), color: col3(0x202326) });   // calandre
   detail.push({ geo: box(0.52, 0.12, 0.02, 0, 0.44, hl + 0.1), color: col3(0xf1efe6) });                    // plaques
   detail.push({ geo: box(0.52, 0.12, 0.02, 0, v.belt - 0.38, -hl - 0.06), color: col3(0xf1efe6) });
@@ -4144,7 +4171,10 @@ function buildCar() {
 const carObj = buildCar();
 
 // ---------- Voitures et camions stationnés ----------
-const PARK_TYPES = [['hatch', 0.22], ['sedan', 0.26], ['suv', 0.22], ['van', 0.1], ['pickup', 0.09], ['truck', 0.11]];
+const PARK_TYPES = [['hatch', 0.22], ['sedan', 0.26], ['suv', 0.22], ['van', 0.1], ['pickup', 0.09], ['truck', 0.11],
+  ['beetle', 0.025], ['muscle', 0.02], ['wagon', 0.025], ['cadillac', 0.015], ['taxi', 0.02]];
+const CLASSIC_COLORS = [0x3fb0a8, 0xd9a53a, 0x7d8a3a, 0xd8642a, 0x8fbfe0, 0xefe3c6, 0x8a1c2b, 0x2e4d7a, 0x6a8f3a].map(col3);   // années 60 et 70
+const carColorFor = (type, u) => type === 'taxi' ? col3(0xf2c318) : type === 'police' ? col3(0xf2f2f0) : /beetle|muscle|wagon|cadillac/.test(type) ? pick(CLASSIC_COLORS, u) : pickW(CAR_COLORS, u);
 const CAR_COLORS = [[0xf2f2f0, 0.24], [0x1c1d20, 0.18], [0x9aa0a6, 0.16], [0x5b6168, 0.12], [0x2d4f8a, 0.08], [0x9e1b1f, 0.08],
   [0x7a1f2b, 0.03], [0x3f5b3a, 0.03], [0xc9b99a, 0.04], [0x5a3c2a, 0.02], [0xe8c547, 0.02]].map(([h, w]) => [col3(h), w]);
 const PARK_MATS = {
@@ -4165,7 +4195,7 @@ function parkedGeometries() {
 }
 const ZERO_M = new THREE.Matrix4().makeScale(0, 0, 0);
 // Masses (kg) : un camion de livraison ne bouge presque pas, une petite voiture part en tête-à-queue
-const PARK_MASS = { hatch: 1150, sedan: 1450, suv: 1950, van: 2150, pickup: 2250, truck: 6500 };
+const PARK_MASS = { hatch: 1150, sedan: 1450, suv: 1950, van: 2150, pickup: 2250, truck: 6500, beetle: 820, muscle: 1550, wagon: 1950, cadillac: 2250, sport: 1400, taxi: 1500, police: 1700 };
 const PARK_FRICTION = 6.5;                  // m/s² : roues bloquées (au « P ») qui glissent sur l'asphalte
 function parkVehicles(W, cap, prob) {
   seed = 31337 + W.id.length * 7;
@@ -4202,8 +4232,24 @@ function parkVehicles(W, cap, prob) {
       i: list.length, type, x: s.x, z: s.z, yaw, hx: s.x, hz: s.z, hyaw: yaw,
       e: (g.L - g.W) / 2, r: g.W / 2, L: g.L, Wd: g.W, H: V.box || V.H, nose: V.nose, mass, I: (mass * (g.L ** 2 + g.W ** 2)) / 12,
       vx: 0, vz: 0, w: 0, tx: 0, tz: 0, tvx: 0, tvz: 0, hop: 0, vy: 0, alarm: 0,
-      awake: false, off: false, color: pickW(CAR_COLORS, rand()), slot: 0, cell: 0,
+      awake: false, off: false, color: carColorFor(type, rand()), slot: 0, cell: 0,
     });
+  }
+  // voitures qui circulent (sur le graphe routier)
+  const aiList = [];
+  const nAI = W.graph ? ({ plateau: 80, quebec: 55, invente: 28 }[W.id] ?? 30) : 0;
+  for (let k = 0; k < nAI; k++) {
+    const type = pickW(TRAFFIC_TYPES, rand()), g = geos[type], V = VEHICLES[type], mass = PARK_MASS[type];
+    const v = {
+      i: list.length, type, x: 0, z: 0, yaw: 0, hx: 0, hz: 0, hyaw: 0,
+      e: (g.L - g.W) / 2, r: g.W / 2, L: g.L, Wd: g.W, H: V.box || V.H, nose: V.nose, mass, I: (mass * (g.L ** 2 + g.W ** 2)) / 12,
+      vx: 0, vz: 0, w: 0, tx: 0, tz: 0, tvx: 0, tvz: 0, hop: 0, vy: 0, alarm: 0,
+      awake: false, off: false, color: carColorFor(type, rand()), slot: 0, cell: 0,
+      ai: { cruise: rrange(8.5, 13), speed: 0, a: 0, b: 0, c: -1, t: 0, L: 1, turn: 10, crashed: false, wait: 0 },
+    };
+    if (!placeAI(v, W.spawn, 0, 6000, W)) continue;
+    (perType[type] ||= []).push(list.length);
+    list.push(v); aiList.push(v);
   }
   const meshes = {};
   for (const [type, idxs] of Object.entries(perType)) {
@@ -4219,7 +4265,7 @@ function parkVehicles(W, cap, prob) {
   }
   const grid = new Grid(24);
   list.forEach(c => { grid.add(c.i, c.x, c.z, c.x, c.z); c.cell = gridKey(grid, c.x, c.z); });
-  const P = W.parked = { list, meshes, grid, awake: [], moved: new Set(), redraw: new Set(), dirty: new Set() };
+  const P = W.parked = { list, meshes, grid, awake: [], moved: new Set(), redraw: new Set(), dirty: new Set(), ai: aiList };
   for (const c of list) setParkedMatrix(W, c);
   flushParked(W);
   // retirer / remettre des véhicules (zones de chantier)
@@ -4230,6 +4276,7 @@ function parkVehicles(W, cap, prob) {
   // nouvelle partie : chaque véhicule bousculé reprend sa place
   W.resetParked = () => {
     for (const c of P.moved) {
+      if (c.ai) { c.awake = false; placeAI(c, car.pos, 120, 380, W); regrid(P, c); setParkedMatrix(W, c); continue; }
       Object.assign(c, { x: c.hx, z: c.hz, yaw: c.hyaw, vx: 0, vz: 0, w: 0, tx: 0, tz: 0, tvx: 0, tvz: 0, hop: 0, vy: 0, alarm: 0, awake: false });
       regrid(P, c);
       setParkedMatrix(W, c);
@@ -4401,19 +4448,21 @@ function buildRoadGraph(W) {
     }
   });
   // 2) nœuds (fusionnés à moins de 1,5 m) et arêtes
-  const X = [], Z = [], adj = [], nodeGrid = new Grid(6);
+  const X = [], Z = [], adj = [], WD = [], no = new Set(), nodeGrid = new Grid(6);
+  let curW = 8;
   const node = (x, z, snap) => {
     const ci = Math.floor(x / 6), cj = Math.floor(z / 6);
     for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) for (const id of nodeGrid.at((ci + di) * 6 + 3, (cj + dj) * 6 + 3)) {
-      if (Math.abs(X[id] - x) < snap && Math.abs(Z[id] - z) < snap) return id;
+      if (Math.abs(X[id] - x) < snap && Math.abs(Z[id] - z) < snap) { WD[id] = Math.max(WD[id], curW); return id; }
     }
     const id = X.length;
-    X.push(x); Z.push(z); adj.push([]);
+    X.push(x); Z.push(z); adj.push([]); WD.push(curW);
     nodeGrid.add(id, x, z, x, z);
     return id;
   };
-  const link = (a, b) => { if (a !== b && !adj[a].includes(b)) { adj[a].push(b); adj[b].push(a); } };
+  const link = (a, b) => { if (a !== b && !adj[a].includes(b)) { adj[a].push(b); adj[b].push(a); if (curW < 9) no.add(b * 100000 + a); } };   // rue étroite : sens unique
   ways.forEach((w, i) => {
+    curW = w.w;
     const pts = [];
     for (let j = 0; j < w.pts.length - 1; j++) {
       const [ax, az] = w.pts[j], [bx, bz] = w.pts[j + 1], L2 = (bx - ax) ** 2 + (bz - az) ** 2 || 1;
@@ -4441,7 +4490,7 @@ function buildRoadGraph(W) {
       prev = id;
     }
   });
-  W.graph = { X, Z, adj, grid: nodeGrid, n: X.length };
+  W.graph = { X, Z, adj, W: WD, no, grid: nodeGrid, n: X.length, blocked: null };
 }
 function nearestNode(W, x, z, maxR = 200) {
   const G = W.graph;
@@ -4487,6 +4536,105 @@ function findPath(W, from, to) {
   const path = [to];
   while (path[path.length - 1] !== from) path.push(came[path[path.length - 1]]);
   return path.reverse();
+}
+
+// ---------- Circulation : des voitures qui roulent à droite, tournent aux carrefours, s'arrêtent derrière toi ----------
+// Ce sont des véhicules « stationnés » que l'on pilote : percutés, la physique reprend la main (même comportement).
+const TRAFFIC_TYPES = [['sedan', 0.24], ['hatch', 0.2], ['suv', 0.18], ['van', 0.06], ['pickup', 0.07], ['taxi', 0.06], ['truck', 0.04],
+  ['beetle', 0.04], ['muscle', 0.04], ['wagon', 0.04], ['cadillac', 0.03]];
+function laneOf(G, a, b) {
+  const w = Math.min(G.W[a], G.W[b]);
+  return w < 9 ? 0 : clamp(w / 2 - 3.05, 0.8, w / 4);            // rue étroite : sens unique, au milieu
+}
+function nextNodeAI(G, a, b) {
+  const cands = [];
+  const dx = G.X[b] - G.X[a], dz = G.Z[b] - G.Z[a], dl = Math.hypot(dx, dz) || 1;
+  for (const c of G.adj[b]) {
+    if (c === a || G.no.has(b * 100000 + c) || (G.blocked && G.blocked[c])) continue;
+    const ex = G.X[c] - G.X[b], ez = G.Z[c] - G.Z[b], el = Math.hypot(ex, ez) || 1, cos = (dx * ex + dz * ez) / (dl * el);
+    cands.push([c, cos > 0.85 ? 5 : cos > 0 ? 1.4 : 0.5]);          // on continue tout droit le plus souvent
+  }
+  if (!cands.length) return G.no.has(b * 100000 + a) ? -1 : a;       // cul-de-sac : demi-tour (si permis)
+  return pickW(cands, Math.random());
+}
+function turnSpeedAI(G, a, b, c, cruise) {
+  if (c < 0) return 3;
+  const ax = G.X[b] - G.X[a], az = G.Z[b] - G.Z[a], bx = G.X[c] - G.X[b], bz = G.Z[c] - G.Z[b];
+  const cos = (ax * bx + az * bz) / ((Math.hypot(ax, az) * Math.hypot(bx, bz)) || 1);
+  return cos > 0.9 ? cruise : cos > 0.5 ? Math.min(cruise, 7) : 4.2;
+}
+function placeAI(v, near, minD, maxD, W = world) {
+  const G = W.graph, A = v.ai;
+  for (let tries = 0; tries < 40; tries++) {
+    const a = Math.floor(Math.random() * G.n);
+    if (!G.adj[a].length || (G.blocked && G.blocked[a])) continue;
+    const d = Math.hypot(G.X[a] - near.x, G.Z[a] - near.z);
+    if (d < minD || d > maxD) continue;
+    const opts = G.adj[a].filter(b => !G.no.has(a * 100000 + b) && !(G.blocked && G.blocked[b]));
+    if (!opts.length) continue;
+    const b = opts[Math.floor(Math.random() * opts.length)];
+    Object.assign(A, { a, b, t: 0, L: Math.hypot(G.X[b] - G.X[a], G.Z[b] - G.Z[a]) || 1, crashed: false, wait: 0 });
+    A.c = nextNodeAI(G, a, b);
+    A.turn = turnSpeedAI(G, a, b, A.c, A.cruise);
+    A.speed = A.cruise * 0.7;
+    const dx = (G.X[b] - G.X[a]) / A.L, dz = (G.Z[b] - G.Z[a]) / A.L, lane = laneOf(G, a, b);
+    Object.assign(v, { x: G.X[a] + dz * lane, z: G.Z[a] - dx * lane, yaw: Math.atan2(dx, dz), vx: 0, vz: 0, w: 0, tx: 0, tz: 0, tvx: 0, tvz: 0, hop: 0, vy: 0, alarm: 0, off: false });
+    return true;
+  }
+  return false;
+}
+let hornCd = 0;
+function horn(vol = 0.1, far = false) {
+  blip(415, 405, far ? 0.25 : 0.45, 'square', vol); blip(523, 515, far ? 0.25 : 0.45, 'square', vol * 0.8);
+}
+function updateTraffic(dt) {
+  const P = world.parked, G = world.graph;
+  if (!P || !P.ai || !G || !P.ai.length) return;
+  hornCd -= dt;
+  const px = car.pos.x, pz = car.pos.z;
+  for (const v of P.ai) {
+    const A = v.ai;
+    if (v.off) continue;
+    if (v.awake) { A.crashed = true; continue; }                       // la physique a la main
+    const dP = Math.hypot(v.x - px, v.z - pz);
+    if (A.crashed || dP > 430) {                                       // hors de vue ou accidentée : elle repart ailleurs
+      if (dP > (A.crashed ? 240 : 430)) { if (placeAI(v, car.pos, 160, 380)) { regrid(P, v); P.redraw.add(v); } }
+      continue;
+    }
+    const hx = Math.sin(v.yaw), hz = Math.cos(v.yaw);
+    let target = Math.min(A.cruise, A.turn);
+    const ax = px - v.x, az = pz - v.z, ahead = ax * hx + az * hz, lat = Math.abs(ax * hz - az * hx);
+    const blockedByYou = ahead > 0 && ahead < 17 && lat < 2.6;
+    if (blockedByYou) target = Math.min(target, Math.max(0, (ahead - 6.5) * 0.9));
+    for (const u of P.ai) {
+      if (u === v || u.off) continue;
+      const bx = u.x - v.x, bz = u.z - v.z;
+      if (bx > 16 || bx < -16 || bz > 16 || bz < -16) continue;
+      const ah = bx * hx + bz * hz, la = Math.abs(bx * hz - bz * hx);
+      if (ah > 0 && ah < 14 && la < 2.1) target = Math.min(target, Math.max(0, (ah - 6.8) * 0.9));
+    }
+    // coincée derrière toi : elle klaxonne
+    if (blockedByYou && A.speed < 0.5) { A.wait += dt; if (A.wait > 2.5 && hornCd <= 0 && dP < 40) { horn(0.06 * clamp(1 - dP / 50, 0.2, 1)); hornCd = 2.2; A.wait = 0.8; } } else A.wait = 0;
+    A.speed = moveTowards(A.speed, target, (target < A.speed ? 9 : 2.8) * dt);
+    A.t += A.speed * dt;
+    let guard = 0;
+    while (A.t >= A.L && guard++ < 4) {                                // nœud suivant
+      A.t -= A.L;
+      if (A.c < 0) { placeAI(v, car.pos, 160, 380); break; }
+      A.a = A.b; A.b = A.c;
+      A.L = Math.hypot(G.X[A.b] - G.X[A.a], G.Z[A.b] - G.Z[A.a]) || 1;
+      A.c = nextNodeAI(G, A.a, A.b);
+      A.turn = turnSpeedAI(G, A.a, A.b, A.c, A.cruise);
+    }
+    const f = clamp(A.t / A.L, 0, 1), dx = (G.X[A.b] - G.X[A.a]) / A.L, dz = (G.Z[A.b] - G.Z[A.a]) / A.L, lane = laneOf(G, A.a, A.b);
+    const tx = G.X[A.a] + (G.X[A.b] - G.X[A.a]) * f + dz * lane, tz = G.Z[A.a] + (G.Z[A.b] - G.Z[A.a]) * f - dx * lane;
+    const k = 1 - Math.exp(-10 * dt);
+    v.x += (tx - v.x) * k; v.z += (tz - v.z) * k;                      // on glisse vers la voie (virages en douceur)
+    v.yaw = lerpAngle(v.yaw, Math.atan2(dx, dz), 1 - Math.exp(-6 * dt));
+    v.vx = Math.sin(v.yaw) * A.speed; v.vz = Math.cos(v.yaw) * A.speed;
+    regrid(P, v);
+    P.redraw.add(v);
+  }
 }
 
 // ---------- Traces de pneus (lumineuses en mode années 80) ----------
@@ -4616,7 +4764,8 @@ function jolt(v, dvx, dvz, dv) {
   v.tvx += -(dvx * fx + dvz * fz) * 0.4 * k;
   v.tvz += (dvx * fz - dvz * fx) * 0.5 * k;
   if (dv > 5) { v.vy = Math.max(v.vy, Math.min(2.6, dv * 0.1)); v.hop = Math.max(v.hop, 0.001); }
-  if (dv > 1.2 && v.alarm <= 0) v.alarm = 6;
+  if (v.ai) { if (dv > 1.2 && hornCd <= 0) { horn(0.12); hornCd = 1.2; } }
+  else if (dv > 1.2 && v.alarm <= 0) v.alarm = 6;
 }
 function collideParked(P, cx, cz) {
   const cell = P.grid.cell, G = world.ground;
@@ -5479,6 +5628,14 @@ function setSite(W, on) {
     if (W.hideParked && W.site.hideCars.size) W.hideParked([...W.site.hideCars], on);
   }
   W.siteOn = on && !!W.site;
+  if (W.graph) {                                                       // les voitures ne s'engagent pas dans les rues barrées
+    const G = W.graph;
+    G.blocked = null;
+    if (W.siteOn) {
+      G.blocked = new Uint8Array(G.n);
+      for (const q of W.site.siteList) for (let id = 0; id < G.n; id++) if (Math.abs(G.X[id] - q.x) < q.r && Math.abs(G.Z[id] - q.z) < q.r && Math.hypot(G.X[id] - q.x, G.Z[id] - q.z) < q.r) G.blocked[id] = 1;
+    }
+  }
   W.extraAt = W.siteOn ? W.site.extraAt : null;
 }
 function setMode(m) {
@@ -6062,6 +6219,7 @@ function frame() {
   const inp = state === 'menu' ? NO_INPUT : readInput();
   hitImpulse = 0;
   const n = Math.max(1, Math.ceil(dt / PHYS_STEP));
+  updateTraffic(dt);
   for (let i = 0; i < n; i++) { stepCar(dt / n, inp); stepParked(dt / n); }
   if (state === 'play') elapsed += dt;
   const drifting = updateCarVisual(dt, inp);
