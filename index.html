@@ -2270,6 +2270,86 @@ class SignBatch {
   }
 }
 
+// ---------- Statues et monuments (OpenStreetMap) : figure de bronze sur socle de pierre, buste, statue équestre,
+// obélisque ou sculpture ; le nom est gravé sur le socle, tourné vers la rue ----------
+const STATUE_GEO = (() => {
+  const P = (geo, color) => ({ geo, color });
+  const patina = col3(0x4f7f6a), dark = col3(0x3f5f52), stone = col3(0xcac4b6), stone2 = col3(0xb3ad9f);
+  const cyl = (r0, r1, h, y, x = 0, z = 0, seg = 10) => new THREE.CylinderGeometry(r0, r1, h, seg).translate(x, y + h / 2, z);
+  const box = (w, h, d, x, y, z) => new THREE.BoxGeometry(w, h, d).translate(x, y + h / 2, z);
+  // personnage debout en redingote, bras droit levé (environ 3 m)
+  const figure = (y0, s) => [
+    P(cyl(0.12 * s, 0.13 * s, 0.9 * s, y0, 0.12 * s), dark), P(cyl(0.12 * s, 0.13 * s, 0.9 * s, y0, -0.12 * s), dark),
+    P(cyl(0.3 * s, 0.4 * s, 0.95 * s, y0 + 0.55 * s), patina),
+    P(cyl(0.27 * s, 0.3 * s, 0.55 * s, y0 + 1.3 * s), patina),
+    P(new THREE.SphereGeometry(0.14 * s, 10, 8).translate(0, y0 + 2.0 * s, 0), patina),
+    P(rod([0.3 * s, y0 + 1.75 * s, 0], [0.5 * s, y0 + 2.4 * s, 0.1 * s], 0.11 * s), patina),
+    P(rod([-0.3 * s, y0 + 1.75 * s, 0], [-0.38 * s, y0 + 1.2 * s, 0.12 * s], 0.11 * s), patina),
+  ];
+  const plinth = (w, h, d) => [P(box(w + 0.3, 0.35, d + 0.3, 0, 0, 0), stone2), P(box(w, h, d, 0, 0.35, 0), stone), P(box(w + 0.2, 0.18, d + 0.2, 0, 0.35 + h, 0), stone2)];
+  const statue = mergeParts([...plinth(1.5, 2.2, 1.5), ...figure(2.73, 1.35)]);
+  const bust = mergeParts([
+    ...plinth(0.7, 1.3, 0.7),
+    P(cyl(0.34, 0.42, 0.45, 1.83), patina),
+    P(new THREE.SphereGeometry(0.25, 12, 10).translate(0, 2.52, 0), patina),
+  ]);
+  // statue équestre : cheval au pas et cavalier
+  const horse = [
+    P(new THREE.CylinderGeometry(0.42, 0.42, 1.9, 12).rotateX(Math.PI / 2).translate(0, 3.35, 0), patina),
+    P(rod([0, 3.5, 0.8], [0, 4.3, 1.25], 0.34, 0.42), patina),
+    P(rod([0, 4.35, 1.2], [0, 4.1, 1.75], 0.22, 0.32), patina),
+    ...[[0.22, 0.75], [-0.22, 0.75], [0.22, -0.75], [-0.22, -0.75]].map(([x, z], i) => P(rod([x, 3.1, z], [x, 2.43, z + (i === 0 ? 0.35 : 0)], 0.14), dark)),
+    P(rod([0, 3.5, -0.95], [0, 2.9, -1.25], 0.12), dark),
+    P(cyl(0.22, 0.26, 0.7, 3.75, 0, -0.1), patina),
+    P(new THREE.SphereGeometry(0.13, 10, 8).translate(0, 4.6, -0.05), patina),
+    P(rod([0.22, 4.25, -0.05], [0.4, 4.9, 0.25], 0.1), patina),
+    P(rod([0.2, 3.8, 0], [0.26, 3.2, 0.2], 0.12), dark), P(rod([-0.2, 3.8, 0], [-0.26, 3.2, 0.2], 0.12), dark),
+  ];
+  const equestrian = mergeParts([P(box(2.6, 0.4, 4.4, 0, 0, 0), stone2), P(box(2.2, 1.9, 4, 0, 0.4, 0), stone), P(box(2.4, 0.14, 4.2, 0, 2.3, 0), stone2), ...horse]);
+  // obélisque ou colonne commémorative
+  const obelisk = mergeParts([
+    P(box(2.2, 0.4, 2.2, 0, 0, 0), stone2), P(box(1.6, 1.2, 1.6, 0, 0.4, 0), stone),
+    P(new THREE.CylinderGeometry(0.42, 0.62, 6.5, 4).rotateY(Math.PI / 4).translate(0, 4.85, 0), stone),
+    P(new THREE.ConeGeometry(0.42 * Math.SQRT2 * 0.72, 0.8, 4).rotateY(Math.PI / 4).translate(0, 8.5, 0), patina),
+  ]);
+  // sculpture contemporaine : anneau et cubes empilés
+  const sculpture = mergeParts([
+    P(box(2.2, 0.35, 2.2, 0, 0, 0), stone2),
+    P(new THREE.TorusGeometry(1.1, 0.16, 8, 24).translate(0, 1.6, 0), col3(0xb8452a)),
+    P(new THREE.BoxGeometry(0.7, 0.7, 0.7).rotateY(0.5).rotateX(0.4).translate(0.2, 0.75, 0.1), col3(0x9aa4ad)),
+  ]);
+  return { s: statue, b: bust, e: equestrian, o: obelisk, a: sculpture };
+})();
+const STATUE_R = { s: 1.1, b: 0.6, e: 2.4, o: 1.2, a: 1.3 };
+const STATUE_H = { s: 2.73, b: 1.65, e: 2.44, o: 1.6, a: 0.35 };        // haut du socle (plaque juste en dessous)
+const STATUE_MAT = { normal: new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, metalness: 0.35 }), retro: basic(hdr(0.35, 1.5, 1.2), { vertexColors: true }) };
+function addStatues(W, list, signs) {
+  if (!list || !list.length) return;
+  const by = {};
+  for (const st of list) (by[st.k] ||= []).push(st);
+  const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3();
+  W.statues = [];
+  for (const [k, arr] of Object.entries(by)) {
+    const im = new THREE.InstancedMesh(STATUE_GEO[k], undefined, arr.length);
+    reg(im, STATUE_MAT.normal, STATUE_MAT.retro);
+    im.castShadow = im.receiveShadow = true;
+    arr.forEach((st, i) => {
+      const [px, pz] = W.nearestRoad(st.x, st.z), yaw = Math.atan2(px - st.x, pz - st.z), y = W.terrain(st.x, st.z);
+      _q.setFromAxisAngle(Y_AXIS, yaw);
+      im.setMatrixAt(i, _m.compose(_p.set(st.x, y - 0.05, st.z), _q, ONE));
+      addCircle(W.grid, st.x, st.z, STATUE_R[k]);
+      W.statues.push({ n: st.n, x: st.x, z: st.z, seen: false });
+      if (st.n && signs && k !== 'a') {                                 // plaque gravée sur la face tournée vers la rue
+        const fx = Math.sin(yaw), fz = Math.cos(yaw), ux = fz, uz = -fx, d = k === 'e' ? 2.02 : k === 'b' ? 0.37 : k === 'o' ? 0.82 : 0.77;
+        const w = k === 'e' ? 2.1 : k === 'b' ? 0.9 : 1.5, top = y + STATUE_H[k] - (k === 'e' ? 0.5 : 0.35);
+        signs.add({ ax: st.x + fx * d - ux * w / 2, az: st.z + fz * d - uz * w / 2, ux, uz, nx: fx, nz: fz, L: w + 0.5, top, shops: [{ n: st.n, c: 'e', x: st.x, z: st.z }] });
+      }
+    });
+    im.instanceMatrix.needsUpdate = true;
+    W.group.add(im);
+  }
+}
+
 function plantTrees(W, list) {
   for (const t of list) { t.item = addCircle(W.grid, t.x, t.z, 0.55 * t.s); t.item.tree = t; t.parts = []; t.fly = null; }
   const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3();
@@ -2925,7 +3005,9 @@ function buildRealWorld(id, D, cityStyle) {
   // bâtiments (avec les enseignes de leurs commerces)
   const shopsBy = new Map();
   for (const sh of D.shops || []) { if (!shopsBy.has(sh.b)) shopsBy.set(sh.b, []); shopsBy.get(sh.b).push(sh); }
-  new CityBatch(W, CITY_STYLES[cityStyle], W.roadGrid).build(D.buildings.map((bd, i) => ({ ring: ringOf(bd.p), h: bd.h, l: bd.l, t: bd.t || bd.s || '', n: bd.n, rs: bd.rs, rc: bd.rc, shops: shopsBy.get(i) })));
+  const batch = new CityBatch(W, CITY_STYLES[cityStyle], W.roadGrid);
+  addStatues(W, D.statues, batch.signs);                              // statues et monuments (plaque gravée au passage)
+  batch.build(D.buildings.map((bd, i) => ({ ring: ringOf(bd.p), h: bd.h, l: bd.l, t: bd.t || bd.s || '', n: bd.n, rs: bd.rs, rc: bd.rc, shops: shopsBy.get(i) })));
 
   // fortifications : on les ouvre là où une rue les traverse, avec un linteau de porte
   if (D.walls && D.walls.length) {
@@ -5006,8 +5088,8 @@ const WORLD_INFO = {
   },
   quebec: {
     eyebrow: 'Départ · Rue Saint-Louis',
-    route: ['Haute-Ville', 'Basse-Ville', 'Remparts', 'Fleuve'],
-    note: `Les vraies rues du Vieux-Québec, avec leur relief : maisons de pierre aux toits de tôle et lucarnes, clochers, Côte de la Montagne, remparts et portes, et les enseignes des vrais commerces (rue Saint-Jean, Petit-Champlain…). Départ devant le Château Frontenac. ${OSM_CREDIT}`,
+    route: ['Vieux-Québec', 'Saint-Jean-Baptiste', 'Montcalm', 'Plaines'],
+    note: `Le Vieux-Québec, Saint-Jean-Baptiste et Montcalm dans leurs vraies limites, avec leur relief : maisons de pierre aux toits de tôle et lucarnes, clochers, Côte de la Montagne, remparts et portes, Grande Allée, avenue Cartier et plaines d'Abraham, les statues et monuments, et les enseignes des vrais commerces (rue Saint-Jean, Petit-Champlain…). ${OSM_CREDIT}`,
   },
   plateau: {
     eyebrow: 'Départ · Rue Saint-Denis',
@@ -5089,6 +5171,7 @@ function resetRun() {
   collected = 0;
   elapsed = 0;
   car.nitro = 1; car.boost = 0;
+  if (world.statues) for (const st of world.statues) st.seen = false;
   if (world.nitros) for (const n of world.nitros.list) { n.taken = false; n.t = 0; }
   if (world.siteOn) resetChantier(world.site);
   resetCrashes();
@@ -5490,7 +5573,18 @@ function updateWorld(dt) {
   }
 }
 
+let statueTimer = 0;
+function updateStatueNames(dt) {
+  statueTimer -= dt;
+  if (statueTimer > 0 || !world.statues || state !== 'play') return;
+  statueTimer = 0.3;
+  for (const st of world.statues) {
+    if (st.seen || !st.n || Math.abs(st.x - car.pos.x) > 16 || Math.abs(st.z - car.pos.z) > 16) continue;
+    if (Math.hypot(st.x - car.pos.x, st.z - car.pos.z) < 14) { st.seen = true; toast(st.n, 1700); break; }
+  }
+}
 function updateHUD(dt) {
+  updateStatueNames(dt);
   const kmh = Math.round(Math.hypot(car.vx, car.vz) * 3.6);
   setText(el.speed, kmh);
   setText(el.speed2, `${kmh} km/h`);

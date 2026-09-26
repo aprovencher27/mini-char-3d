@@ -23,10 +23,12 @@ const COIN_COUNT = 32;
 const AREAS = {
   'vieux-quebec': {
     out: 'vieux-quebec.js', global: 'VIEUX_QUEBEC',
-    bbox: { s: 46.8035, w: -71.2180, n: 46.8200, e: -71.1985 },
+    bbox: { s: 46.8035, w: -71.2180, n: 46.8200, e: -71.1985 },   // remplacée par les limites des quartiers
+    // quartiers Vieux-Québec–Cap-Blanc–Colline-Parlementaire, Saint-Jean-Baptiste et Montcalm (relations OSM)
+    boundary: { rel: [8381621, 7716092, 8382027], name: 'Vieux-Québec – Montcalm', drive: 12, keep: 120 },
     river: { seed: [46.8110, -71.1990], level: 2 },
     levels: [[3, 0.35], [4, 0.45], [5, 0.2]],   // étages quand OSM ne dit rien
-    maxTrees: 1600,
+    maxTrees: 4200,
     spawn: { near: 'Château Frontenac', road: /^Rue Saint-Louis$/, toward: 'Porte Saint-Louis' },
     shops: 330,
     famous: /Anciens Canadiens|Paillard|Chez Temporel|Lapin Sauté|Cochon Dingue|Boutique de Noël|Continental|Chez Boulay|St-Patrick|Trois Garçons|Antiquaire|Casse-Crêpe|Simons|Pantoute|Petit Coin Latin|Moisan|Érico|Laurie Raphaël|Saint-Amour|Chic Shack|Château Fromage|Maison Smith|Tam Tam|Pub Saint-Alexandre|Bello|Il Teatro|Le Clocher Penché|Café-Boulangerie/i,
@@ -46,6 +48,11 @@ const AREAS = {
       ['Jardin des Gouverneurs', /Jardin des Gouverneurs/], ['Maison Chevalier', /Maison Chevalier/],
       ['Capitole', /Capitole/], ['Palais Montcalm', /Palais Montcalm/], ["Place D'Youville", /Place D.Youville/],
       ['Monastère des Augustines', /Augustines/], ['Morrin Centre', /Morrin/], ['Bassin Louise', /Bassin Louise/],
+      ["Plaines d'Abraham", /Plaines d.Abraham|Parc des Champs-de-Bataille/], ['Musée national des beaux-arts', /Musée national des beaux-arts/],
+      ['Avenue Cartier', /^Avenue Cartier$/], ['Grande Allée', /^Grande Allée Est$/], ['Église Saint-Jean-Baptiste', /^Église Saint-Jean-Baptiste/],
+      ['Manège militaire', /Manège militaire/], ["Jardin Jeanne-d'Arc", /Jardin Jeanne-d.Arc/], ['Tour Martello', /Tour Martello/],
+      ['Observatoire de la Capitale', /Observatoire de la Capitale|Édifice Marie-Guyart/], ['Rue Saint-Jean', /^Rue Saint-Jean$/],
+      ['Parc des Braves', /^Parc des Braves$/], ['Avenue Cartier (Marché)', /Marché Cartier|Halles Cartier/],
     ],
   },
   'plateau-mont-royal': {
@@ -188,8 +195,16 @@ async function buildArea(id, A) {
   // Limites de l'arrondissement : elles fixent la zone à télécharger
   let BBOX = A.bbox, relEl = null;
   if (A.boundary) {
-    const raw = await cached('boundary.json', () => fetchOverpass('boundary', `[out:json][timeout:120];relation(${A.boundary.rel});out geom;`));
-    relEl = raw.elements.find(e => e.type === 'relation');
+    const ids = [].concat(A.boundary.rel);
+    const raw = await cached('boundary.json', () => fetchOverpass('boundary', `[out:json][timeout:120];relation(id:${ids.join(',')});out geom;`));
+    const rels = raw.elements.filter(e => e.type === 'relation');
+    // plusieurs quartiers : on garde leur contour commun (une frontière partagée par deux quartiers disparaît)
+    const uses = new Map();
+    for (const r of rels) for (const m of r.members) if (m.type === 'way' && m.role !== 'inner') uses.set(m.ref, (uses.get(m.ref) || 0) + 1);
+    relEl = {
+      tags: { name: A.boundary.name || (rels[0].tags || {}).name },
+      members: rels.flatMap(r => r.members.filter(m => m.type === 'way' && m.role !== 'inner' && uses.get(m.ref) === 1)),
+    };
     let s = 90, n = -90, w = 180, e = -180;
     for (const m of relEl.members) if (m.type === 'way' && m.role !== 'inner') for (const p of m.geometry || []) { s = Math.min(s, p.lat); n = Math.max(n, p.lat); w = Math.min(w, p.lon); e = Math.max(e, p.lon); }
     const pad = A.boundary.keep + 30, pLat = pad / 111130, pLon = pad / (111320 * Math.cos(((s + n) / 2) * Math.PI / 180));
@@ -623,7 +638,7 @@ async function buildArea(id, A) {
     landmarks.push({ n: label, x: round1(x), z: round1(z) });
     const nr = nearestRoad(x, z, drivable, 400);
     const reach = (cands[0].e.tags || {}).leisure ? 350 : 150;
-    if (!nr || nr.d > reach || !inRegion(nr.x, nr.z, -15) || !farFromCoins(nr.x, nr.z, 45)) continue;
+    if (!nr || nr.d > reach || !inRegion(nr.x, nr.z, -15) || !farFromCoins(nr.x, nr.z, 45) || coins.length >= COIN_COUNT - 4) continue;
     coins.push({ x: round1(nr.x), z: round1(nr.z), n: label });
   }
   const landmarkCoins = coins.length;
@@ -703,6 +718,52 @@ async function buildArea(id, A) {
     console.log(`  ${shops.length} commerces nommés sur ${cands.length} (${Object.entries(byCat).map(([k, v]) => `${k}:${v}`).join(' ')}) — ${shops.slice(0, 12).map(s => s.n).join(', ')}…`);
   }
 
+  // ---------- Adresses civiques (pour « Aller à… ») ----------
+  const addr = {};
+  {
+    const raw = await overpass('addresses', 'nwr["addr:housenumber"]["addr:street"];out center tags;');
+    for (const el of raw.elements) {
+      const t = el.tags || {}, lat = el.lat ?? el.center?.lat, lon = el.lon ?? el.center?.lon;
+      if (lat == null) continue;
+      const [x, z] = proj(lat, lon);
+      if (!inside(x, z) || !inRegion(x, z, 0)) continue;
+      for (const part of String(t['addr:housenumber']).split(/[;,]/)) {
+        const num = parseInt(part, 10);
+        if (num > 0 && num < 100000) (addr[t['addr:street'].trim()] ||= []).push([num, Math.round(x), Math.round(z)]);
+      }
+    }
+    let n = 0;
+    for (const k of Object.keys(addr)) {
+      const seen = new Set(), flatA = [];
+      for (const [num, x, z] of addr[k].sort((a, b) => a[0] - b[0])) { if (seen.has(num)) continue; seen.add(num); flatA.push(num, x, z); n++; }
+      addr[k] = flatA;
+    }
+    console.log(`  ${n} adresses sur ${Object.keys(addr).length} rues`);
+  }
+  // ---------- Statues et monuments ----------
+  const statues = [];
+  {
+    const raw = await overpass('statues', '(nwr["historic"~"^(memorial|monument)$"];nwr["tourism"="artwork"];);out center tags;');
+    for (const el of raw.elements) {
+      const t = el.tags || {};
+      const kind = `${t.memorial || ''} ${t.artwork_type || ''} ${t.historic === 'monument' ? 'monument' : ''}`;
+      if (/plaque|mural|graffiti|stolperstein|bench|tree|painting|mosaic|stained/.test(kind)) continue;
+      const name = String(t.name || t['subject:fr'] || t.subject || t.inscription || '').replace(/\s+/g, ' ').trim().slice(0, 42);
+      // la plupart des « monuments » sont des statues sur socle ; obélisque seulement quand c'en est un
+      let k = /bust/.test(kind) ? 'b' : /obelisk|column|stele|cross/.test(kind) || /Obélisque|Colonne|Stèle|Croix|Wolfe/i.test(name) ? 'o' :
+        /statue|monument|war_memorial/.test(kind) ? 's' : /sculpture|installation/.test(kind) ? 'a' : '';
+      if (!k) continue;
+      const lat = el.lat ?? el.center?.lat, lon = el.lon ?? el.center?.lon;
+      if (lat == null) continue;
+      const [x, z] = proj(lat, lon);
+      if (!inside(x, z, -5) || !inRegion(x, z, 10) || nearBuilding(x, z, 0.6)) continue;
+      if (/équestre|equestrian/i.test(`${name} ${t.description || ''} ${t.artwork_subject || ''}`) || /Jeanne.?d.?Arc/i.test(name)) k = 'e';
+      if (statues.some(o => Math.hypot(o.x - x, o.z - z) < 4)) continue;
+      statues.push({ n: name, k, x: round1(x), z: round1(z) });
+    }
+    console.log(`  ${statues.length} statues et monuments (${statues.filter(q => q.n).slice(0, 8).map(q => q.n).join(', ')}…)`);
+  }
+
   // ---------- Départ ----------
   let spawn = { x: coins[0].x, z: coins[0].z, yaw: 0 };
   {
@@ -730,6 +791,7 @@ async function buildArea(id, A) {
     areas: areas.map(({ n, p }) => ({ n, p })),
     bikes,
     shops: shops.map(s => ({ n: s.n, c: s.c, b: s.b, x: round1(s.x), z: round1(s.z) })),
+    addr, statues,
     limit: limit ? flat(limit) : null,
     district: relEl ? (relEl.tags || {}).name : null,
   };
