@@ -117,6 +117,37 @@
     border-radius: 50%; background: var(--coin); box-shadow: inset 0 0 0 2px var(--coin-shadow); vertical-align: 0.02em;
   }
   .speed-row { display: none; }
+  #cash { color: var(--coin); }
+  #cash.bump { animation: cashbump 0.35s ease-out; }
+  @keyframes cashbump { 40% { transform: scale(1.18); } }
+  #flash { position: fixed; inset: 0; z-index: 4; pointer-events: none; background: #ffffff; opacity: 0; }
+  #flash.on { animation: flash 0.6s ease-out; }
+  @keyframes flash { 0% { opacity: 0.9; } 100% { opacity: 0; } }
+  /* Garage */
+  .garage { margin: 0 0 18px; border-block: 2px solid var(--sign-white); padding: 8px 0; }
+  .garage summary { display: flex; justify-content: space-between; align-items: center; cursor: pointer; font-size: 15px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; list-style: none; }
+  .garage summary::-webkit-details-marker { display: none; }
+  .garage summary::before { content: '▸'; margin-right: 8px; }
+  .garage[open] summary::before { content: '▾'; }
+  .garage summary span:first-child { margin-right: auto; }
+  .garage-cash { color: var(--coin); }
+  .garage .fine { margin: 8px 0 10px; }
+  .cars { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 10px; }
+  .car-card { display: flex; flex-direction: column; gap: 6px; padding: 8px; border-radius: 10px; border: 2px solid rgba(246, 245, 239, 0.35); background: rgba(0, 0, 0, 0.12); }
+  .car-card.current { border-color: var(--coin); }
+  .car-card.locked canvas { opacity: 0.7; }
+  .car-card canvas { width: 100%; height: auto; }
+  .car-name { font-size: 15px; font-weight: 700; }
+  .car-name span { font-weight: 500; opacity: 0.75; }
+  .bars { display: grid; grid-template-columns: auto 1fr; gap: 3px 8px; align-items: center; font-size: 11px; opacity: 0.9; }
+  .bars i { display: block; height: 6px; border-radius: 3px; background: linear-gradient(to right, var(--coin) calc(var(--v) * 100%), rgba(246, 245, 239, 0.18) 0); }
+  .swatches { display: flex; flex-wrap: wrap; gap: 4px; }
+  .swatch { width: 18px; height: 18px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.5); padding: 0; cursor: pointer; }
+  .swatch.on { border-color: var(--coin); box-shadow: 0 0 0 2px var(--coin); }
+  .car-btn { justify-content: center; }
+  .car-btn:disabled { opacity: 0.55; cursor: default; }
+  .car-perk { margin: 0; font-size: 11px; opacity: 0.85; }
+  body.retro .garage summary, body.retro .car-name { font-family: var(--font-display); font-size: 9px; line-height: 1.6; }
   #nitro { display: flex; justify-content: flex-end; align-items: center; gap: 5px; }
   #nitro i { display: block; width: 13px; height: 17px; border-radius: 4px; border: 2px solid var(--sign-white); opacity: 0.4; }
   #nitro i.on { opacity: 1; background: #53c8ff; border-color: #d8f4ff; box-shadow: 0 0 8px rgba(83, 200, 255, 0.85); }
@@ -328,6 +359,7 @@
   @media (prefers-reduced-motion: reduce) {
     #toast { transition: none; }
     #nitro.boost i { animation: none; }
+    #flash.on, #cash.bump { animation: none; }
     #streetsign.pop { animation: none; }
     .btn:active, .tbtn.on { transform: none; }
   }
@@ -337,6 +369,7 @@
 
 <canvas id="game" tabindex="-1"></canvas>
 <div id="crt" aria-hidden="true"></div>
+<div id="flash" aria-hidden="true"></div>
 
 <div id="streetsign" class="hud" hidden><span id="street-kind"></span><strong id="street-name"></strong></div>
 
@@ -345,6 +378,7 @@
   <span class="k">Temps</span><span class="v" id="time">00:00.0</span>
   <span class="k speed-row">Vitesse</span><span class="v speed-row" id="speed2">0 km/h</span>
   <span class="k">Nitro</span><span class="v" id="nitro"><i></i><i></i><i></i></span>
+  <span class="k">Argent</span><span class="v" id="cash">0 $</span>
   <span class="k" id="best-k" hidden>Record</span><span class="v" id="best" hidden></span>
 </div>
 
@@ -458,6 +492,11 @@
       <dt><kbd>T</kbd></dt><dd>Aller à une adresse</dd>
     </dl>
     <p class="touch-help">◀ ▶ pour tourner, ▲ pour accélérer, ▼ pour freiner et reculer, <strong>Drift</strong> pour le frein à main, <strong>N₂O</strong> pour le nitro. La carte en haut à droite montre les pièces restantes.</p>
+    <details class="garage" id="garage">
+      <summary><span>Garage</span><span class="garage-cash" id="garage-cash">0 $</span></summary>
+      <p class="fine">Ramasse les billets de 20 $ et les pièces, fais des sauts et des courses de taxi pour t'acheter d'autres chars. Attention aux photo-radars : 50 km/h.</p>
+      <div class="cars" id="cars"></div>
+    </details>
     <div class="actions">
       <button id="btn-start" class="btn" type="button">Démarrer</button>
       <button id="btn-new" class="btn ghost" type="button" hidden>Nouvelle partie</button>
@@ -2688,6 +2727,8 @@ function buildInventedWorld() {
   buildRoadGraph(W);
   parkVehicles(W, 320, 0.35);
   addNitros(W, 12);
+  addBills(W, 18);
+  addRadars(W, 2);
 
   // arbres et rochers
   const trees = [];
@@ -3127,6 +3168,8 @@ function buildRealWorld(id, D, cityStyle) {
   buildRoadGraph(W);
   parkVehicles(W, id === 'plateau' ? 2200 : 800, id === 'plateau' ? 0.5 : 0.4);
   addNitros(W, id === 'plateau' ? 30 : 16);
+  addBills(W, id === 'plateau' ? 45 : 32);
+  addRadars(W, id === 'plateau' ? 6 : 4);
 
   // mini-carte (suit la voiture)
   const ext = { minX: M.x0, maxX: M.x0 + M.nx * M.cell, minZ: M.z0, maxZ: M.z0 + M.nz * M.cell };
@@ -4112,14 +4155,14 @@ function vehicleParts(type, fine) {
 }
 
 // ---------- Voiture du joueur ----------
-function buildCar() {
-  const P = vehicleParts('hatch', true), v = P.v;
+function buildCar(type = 'hatch', paintHex = 0xd8282f) {
+  const P = vehicleParts(type, true), v = P.v;
   const root = new THREE.Group();
   const chassis = new THREE.Group();
   chassis.position.y = 0.6;
   root.add(chassis);
   const mats = {
-    paint: { normal: new THREE.MeshStandardMaterial({ color: 0xd8282f, roughness: 0.28, metalness: 0.35 }), retro: new THREE.MeshStandardMaterial({ color: 0x1a0633, roughness: 0.22, metalness: 1 }) },
+    paint: { normal: new THREE.MeshStandardMaterial({ color: paintHex, roughness: 0.28, metalness: 0.35 }), retro: new THREE.MeshStandardMaterial({ color: 0x1a0633, roughness: 0.22, metalness: 1 }) },
     glass: { normal: new THREE.MeshStandardMaterial({ color: 0x16222e, roughness: 0.05, metalness: 0.7 }), retro: new THREE.MeshStandardMaterial({ color: 0x05010c, roughness: 0.05, metalness: 1 }) },
     detail: { normal: new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, metalness: 0.2 }), retro: basic(0x07020f) },
   };
@@ -4168,7 +4211,7 @@ function buildCar() {
   scene.add(root);
   return { root, chassis, wheels, tail, wheelR: v.wr };
 }
-const carObj = buildCar();
+let carObj = buildCar();
 
 // ---------- Voitures et camions stationnés ----------
 const PARK_TYPES = [['hatch', 0.22], ['sedan', 0.26], ['suv', 0.22], ['van', 0.1], ['pickup', 0.09], ['truck', 0.11],
@@ -4683,6 +4726,7 @@ const car = {
   spin: 0,                               // rotation reçue d'un choc (tête-à-queue)
   slip: 0,                               // perte d'adhérence après un gros choc (s)
   nitro: 1, boost: 0,                    // charges de nitro, temps de boost restant (s)
+  top: 40, acc: 16, grip: 12, mass: 1200, I: 1877, span: 0.95,   // selon le char choisi au garage
   grounded: true, airTime: 0,
 };
 const CAR_M = 1200, CAR_I = (CAR_M * (3.95 ** 2 + 1.78 ** 2)) / 12;
@@ -4786,11 +4830,11 @@ function collideParked(P, cx, cz) {
   }
 }
 function hitParked(P, v, nx, nz, pen, qx, qz) {
-  const share = v.mass / (v.mass + CAR_M);                        // le plus léger recule le plus
+  const share = v.mass / (v.mass + car.mass);                     // le plus léger recule le plus
   car.pos.x += nx * pen * share; car.pos.z += nz * pen * share;
   v.x -= nx * pen * (1 - share); v.z -= nz * pen * (1 - share);
   const A = _carBody, w0 = car.yawRate + car.spin, vx0 = v.vx, vz0 = v.vz;
-  A.x = car.pos.x; A.z = car.pos.z; A.vx = car.vx; A.vz = car.vz; A.w = w0;
+  A.x = car.pos.x; A.z = car.pos.z; A.vx = car.vx; A.vz = car.vz; A.w = w0; A.mass = car.mass; A.I = car.I;
   const hit = contactImpulse(A, v, nx, nz, qx, qz, 0.15, 0.3);
   wakeParked(P, v);
   if (hit <= 0) return;
@@ -4880,7 +4924,7 @@ function resolveCollisions() {
   const fx = Math.sin(car.yaw), fz = Math.cos(car.yaw);
   const site = world.siteOn ? world.site : null;
   for (let s = 0; s < 2; s++) {
-    const off = s ? -0.95 : 0.95;
+    const off = s ? -car.span : car.span;
     collideGrid(world.grid, fx, fz, off);
     if (world.parked) collideParked(world.parked, car.pos.x + fx * off, car.pos.z + fz * off);
     if (!site) continue;
@@ -5016,22 +5060,22 @@ function stepCar(dt, inp) {
   const wet = isWet();
 
   if (car.grounded) {
-    const top = wet ? 9 : MAX_SPEED;
+    const top = wet ? 9 : car.top;
     if (inp.throttle) {
       if (vf < -0.5) vf += BRAKE * dt;
-      else if (vf < top) vf += ENGINE * (1 - (Math.max(0, vf) / top) ** 2) * dt;
+      else if (vf < top) vf += car.acc * (1 - (Math.max(0, vf) / top) ** 2) * dt;
     }
     if (inp.brake) {
       if (vf > 0.5) vf -= BRAKE * dt;
       else if (vf > -REVERSE_MAX) vf -= REVERSE_ACC * dt;
     }
     if (!inp.throttle && !inp.brake) vf = moveTowards(vf, 0, (1.2 + Math.abs(vf) * 0.12) * dt);
-    if (car.boost > 0 && !wet) vf = Math.min(NITRO_MAX_SPEED, Math.max(vf, 0) + NITRO_ACC * dt);   // nitro
+    if (car.boost > 0 && !wet) vf = Math.min(Math.max(NITRO_MAX_SPEED, car.top + 12), Math.max(vf, 0) + NITRO_ACC * dt);   // nitro
     else if (vf > top + 0.3) vf = moveTowards(vf, top, 7 * dt);         // après le nitro, on revient à la vitesse max
     if (inp.handbrake) vf = moveTowards(vf, 0, 7 * dt);
     vf -= vf * 0.04 * dt;
     if (wet) vf *= Math.exp(-1.5 * dt);
-    const grip = inp.handbrake ? 1.1 : wet ? 4 : 12;
+    const grip = inp.handbrake ? 1.1 : wet ? 4 : car.grip;
     vl *= Math.exp(-(car.slip > 0 ? Math.min(grip, 2.4) : grip) * dt);   // après un gros choc, la voiture glisse
 
     const sp = Math.abs(vf);
@@ -5040,7 +5084,7 @@ function stepCar(dt, inp) {
     car.yawRate = yr;
   } else {
     car.yawRate = lerp(car.yawRate, car.steer * 1.3, 1 - Math.exp(-3 * dt));
-    if (car.boost > 0) vf = Math.min(NITRO_MAX_SPEED, vf + NITRO_ACC * 0.5 * dt);   // en l'air, la fusée pousse encore
+    if (car.boost > 0) vf = Math.min(Math.max(NITRO_MAX_SPEED, car.top + 12), vf + NITRO_ACC * 0.5 * dt);   // en l'air, la fusée pousse encore
   }
 
   car.boost = Math.max(0, car.boost - dt);
@@ -5267,11 +5311,236 @@ const el = {
   best: $('best'), bestK: $('best-k'), toast: $('toast'), sound: $('sound-label'),
   menu: $('menu'), win: $('win'), winTime: $('win-time'), winBest: $('win-best'), winLede: $('win-lede'),
   menuNote: $('menu-note'), mapNote: $('map-note'), route: $('menu-route'), eyebrow: $('menu-eyebrow'), count: $('menu-count'),
-  start: $('btn-start'), newGame: $('btn-new'), nitro: $('nitro'),
+  start: $('btn-start'), newGame: $('btn-new'), nitro: $('nitro'), cash: $('cash'), flash: $('flash'),
   nav: $('nav'), navArrow: $('nav-arrow'), navDist: $('nav-dist'), navStreet: $('nav-street'),
 };
 el.sound.textContent = muted ? 'Son : non' : 'Son : oui';
 const setText = (e, v) => { v = String(v); if (e._v !== v) { e.textContent = v; e._v = v; } };
+
+// =====================================================================
+// Argent : billets à ramasser, pièces, sauts, courses de taxi ; photo-radars ; garage de chars
+// =====================================================================
+const CARS = [
+  { id: 'hatch', name: 'La petite', year: '2020', price: 0, top: 40, acc: 16, grip: 12, color: 0xd8282f },
+  { id: 'beetle', name: 'Coccinelle', year: '1965', price: 600, top: 34, acc: 12, grip: 10.5, color: 0x8fbfe0 },
+  { id: 'sedan', name: 'Berline', year: '2018', price: 500, top: 42, acc: 16, grip: 12, color: 0x2d4f8a },
+  { id: 'taxi', name: 'Taxi', year: '2019', price: 900, top: 42, acc: 16, grip: 12, color: 0xf2c318, fare: 2 },
+  { id: 'pickup', name: 'Camionnette', year: '2016', price: 800, top: 38, acc: 14, grip: 11, color: 0x5b6168 },
+  { id: 'wagon', name: 'Familiale', year: '1974', price: 1200, top: 38, acc: 13, grip: 10, color: 0xd9a53a },
+  { id: 'muscle', name: 'Muscle car', year: '1969', price: 2500, top: 50, acc: 21, grip: 11, color: 0xd8642a },
+  { id: 'cadillac', name: 'Cadillac', year: '1962', price: 3000, top: 44, acc: 15, grip: 9.5, color: 0x8a1c2b },
+  { id: 'police', name: 'Auto-patrouille', year: '2021', price: 3500, top: 48, acc: 19, grip: 13, color: 0xf2f2f0 },
+  { id: 'sport', name: 'Sport', year: '2024', price: 5000, top: 56, acc: 25, grip: 15, color: 0xe8c547 },
+];
+const PAINTS = [0xd8282f, 0xf2f2f0, 0x1c1d20, 0x2d4f8a, 0x3fb0a8, 0xd9a53a, 0xd8642a, 0x6a8f3a, 0x8a1c2b, 0x8fbfe0, 0xe8c547, 0x7c3aed];
+let cash = Math.max(0, parseInt(store.get('cash') || '0', 10) || 0);
+let owned = new Set((store.get('cars') || 'hatch').split(',').filter(Boolean));
+owned.add('hatch');
+let carId = owned.has(store.get('car')) ? store.get('car') : 'hatch';
+let carPaints = {};
+try { carPaints = JSON.parse(store.get('paints') || '{}') || {}; } catch (e) { carPaints = {}; }
+const fmtCash = n => `${Math.round(n).toLocaleString('fr-CA')} $`;
+function addCash(n) {
+  cash = Math.max(0, Math.round(cash + n));
+  store.set('cash', String(cash));
+  if (el.cash) { setText(el.cash, fmtCash(cash)); el.cash.classList.remove('bump'); void el.cash.offsetWidth; el.cash.classList.add('bump'); }
+}
+function carDef(id = carId) { return CARS.find(c => c.id === id) || CARS[0]; }
+function applyCarStats() {
+  const d = carDef(), v = VEHICLES[d.id];
+  car.top = d.top; car.acc = d.acc; car.grip = d.grip;
+  car.mass = PARK_MASS[d.id] || 1200; car.I = (car.mass * (v.L ** 2 + v.W ** 2)) / 12;
+  car.span = Math.max(0.95, v.L / 2 - 1.0);
+}
+// change le char du joueur (géométrie, peinture, flammes du nitro)
+function setPlayerCar(id, paint) {
+  const d = carDef(id), color = paint ?? carPaints[id] ?? d.color;
+  const old = carObj.root, gone = new Set();
+  old.traverse(o => gone.add(o));
+  for (const list of [styled, retroOnly, normalOnly]) for (let i = list.length - 1; i >= 0; i--) if (gone.has(list[i].obj || list[i])) list.splice(i, 1);
+  old.remove(flames.g);
+  scene.remove(old);
+  const fresh = buildCar(d.id, color);
+  fresh.root.position.copy(old.position); fresh.root.quaternion.copy(old.quaternion);
+  carObj = fresh;
+  const v = VEHICLES[d.id];
+  flames.parts.forEach((m, i) => m.position.set((i < 2 ? 1 : -1) * Math.min(0.42, v.W / 2 - 0.45), 0.3, -v.L / 2 - 0.02));
+  carObj.root.add(flames.g);
+  carId = d.id;
+  store.set('car', carId);
+  applyCarStats();
+  applyStyle();
+}
+
+// ---------- Billets de 20 $ à ramasser (ils reviennent au bout d'une minute) ----------
+const BILL_GEO = mergeParts([
+  { geo: new THREE.BoxGeometry(1.1, 0.05, 0.55), color: col3(0x3f8f4a) },
+  { geo: new THREE.BoxGeometry(0.36, 0.06, 0.36).translate(0, 0.005, 0), color: col3(0xdcefd8) },
+  { geo: new THREE.BoxGeometry(1.1, 0.05, 0.55).translate(0.06, 0.07, 0.04).rotateY(0.25), color: col3(0x4c9f57) },
+]);
+const BILL_MAT = { normal: new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6, emissive: 0x0f3a14, emissiveIntensity: 0.6 }), retro: basic(hdr(0.5, 2.2, 0.6), { vertexColors: true }) };
+function addBills(W, n) {
+  seed = 4211 + W.id.length * 17;
+  const spots = [];
+  for (let tries = 0; tries < n * 40 && spots.length < n; tries++) {
+    const way = W.roadWays[Math.floor(rand() * W.roadWays.length)];
+    if (!way || way.k > 2 || way.pts.length < 2) continue;
+    const i = Math.floor(rand() * (way.pts.length - 1)), f = rand();
+    const [ax, az] = way.pts[i], [bx, bz] = way.pts[i + 1], x = ax + (bx - ax) * f, z = az + (bz - az) * f;
+    if (W.inRegion && !W.inRegion(x, z, -10)) continue;
+    if (spots.some(p => (p.x - x) ** 2 + (p.z - z) ** 2 < 70 * 70) || W.coins.some(c => (c.x - x) ** 2 + (c.z - z) ** 2 < 400)) continue;
+    spots.push({ x, z, y: W.ground(x, z), ph: rand() * 6.28, taken: false, t: 0 });
+  }
+  const m = new THREE.InstancedMesh(BILL_GEO, undefined, Math.max(1, spots.length));
+  reg(m, BILL_MAT.normal, BILL_MAT.retro);
+  m.count = spots.length; m.frustumCulled = false; m.castShadow = true;
+  W.group.add(m);
+  W.bills = { mesh: m, list: spots };
+}
+function updateBills(dt, t) {
+  const B = world.bills;
+  if (!B) return;
+  B.list.forEach((b, i) => {
+    if (b.taken) { b.t -= dt; if (b.t > 0) return; b.taken = false; }
+    const y = b.y + 1.0 + Math.sin(t * 2.6 + b.ph) * 0.15;
+    _pq4.setFromEuler(_pe4.set(0.25 * Math.sin(t * 1.3 + b.ph), t * 2 + b.ph, 0.2));
+    B.mesh.setMatrixAt(i, _pm4.compose(_pp4.set(b.x, y, b.z), _pq4, ONE));
+    if (state === 'play' && Math.abs(b.x - car.pos.x) < 2.6 && Math.abs(b.z - car.pos.z) < 2.6 && car.pos.y < y + 1.5) {
+      b.taken = true; b.t = 60;
+      B.mesh.setMatrixAt(i, ZERO_M);
+      addCash(20);
+      blip(1200, 1800, 0.08, 'square', 0.05); blip(1600, 2400, 0.12, 'square', 0.05, 0.06);
+      toast('+20 $', 700);
+    }
+  });
+  B.mesh.instanceMatrix.needsUpdate = true;
+}
+
+// ---------- Photo-radars : un panneau 50, un poteau, un flash et une amende au-delà de 60 km/h ----------
+const radarSignTex = makeTexture(128, (g, W) => {
+  g.clearRect(0, 0, W, W);
+  g.fillStyle = '#ffffff'; g.beginPath(); g.arc(64, 64, 60, 0, Math.PI * 2); g.fill();
+  g.strokeStyle = '#d62f2f'; g.lineWidth = 12; g.beginPath(); g.arc(64, 64, 52, 0, Math.PI * 2); g.stroke();
+  g.fillStyle = '#12171c'; g.font = '700 54px "Barlow Semi Condensed", Arial, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('50', 64, 68);
+});
+const RADAR_MATS = {
+  body: { normal: new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.5 }), retro: basic(hdr(1.6, 1.2, 0.2), { vertexColors: true }) },
+  sign: { normal: new THREE.MeshStandardMaterial({ map: radarSignTex, alphaTest: 0.5, side: THREE.DoubleSide }), retro: basic(0xffffff, { map: radarSignTex, alphaTest: 0.5, side: THREE.DoubleSide }) },
+};
+const RADAR_LIMIT = 16.7;                                              // 60 km/h (panneau 50, avec la tolérance)
+function addRadars(W, n) {
+  seed = 9001 + W.id.length;
+  const cands = W.roadWays.filter(w => w.k === 0 || w.w >= 10);
+  const body = acc(), sign = acc(), spots = [];
+  for (let tries = 0; tries < 400 && spots.length < n && cands.length; tries++) {
+    const way = cands[Math.floor(rand() * cands.length)], i = Math.floor(rand() * (way.pts.length - 1));
+    const [ax, az] = way.pts[i], [bx, bz] = way.pts[i + 1], L = Math.hypot(bx - ax, bz - az);
+    if (L < 30) continue;
+    const ux = (bx - ax) / L, uz = (bz - az) / L, mx = (ax + bx) / 2, mz = (az + bz) / 2;
+    if (W.inRegion && !W.inRegion(mx, mz, -20)) continue;
+    if (spots.some(p => (p.x - mx) ** 2 + (p.z - mz) ** 2 < 500 * 500)) continue;
+    const off = way.w / 2 + 1.1, x = mx - uz * off, z = mz + ux * off, y = W.ground(x, z);
+    obox(body, x, z, ux, uz, 0.08, 0.08, y, y + 3.4, col3(0x8a8e94));
+    obox(body, x, z, ux, uz, 0.32, 0.26, y + 3.4, y + 3.95, col3(0x3a3e44), true);
+    obox(body, x + ux * 0.33, z + uz * 0.33, ux, uz, 0.02, 0.2, y + 3.5, y + 3.85, col3(0x1a1c1f));
+    obox(body, x, z, ux, uz, 0.33, 0.27, y + 3.62, y + 3.7, col3(0xf2b21b));
+    const sx = x + uz * 0.02, sz = z - ux * 0.02;                     // panneau 50, face aux voitures (sens -u et +u)
+    quad(sign, sx - uz * 0.35, y + 2.35, sz + ux * 0.35, sx + uz * 0.35, y + 2.35, sz - ux * 0.35, sx + uz * 0.35, y + 3.05, sz - ux * 0.35, sx - uz * 0.35, y + 3.05, sz + ux * 0.35, -ux, 0, -uz, WHITE);
+    addCircle(W.grid, x, z, 0.15);
+    spots.push({ x: mx, z: mz, cd: 0 });
+  }
+  if (!spots.length) return;
+  const bm = new THREE.Mesh(accGeometry(body)); reg(bm, RADAR_MATS.body.normal, RADAR_MATS.body.retro); bm.castShadow = true; W.group.add(bm);
+  const sm = new THREE.Mesh(accGeometry(sign)); reg(sm, RADAR_MATS.sign.normal, RADAR_MATS.sign.retro); W.group.add(sm);
+  W.radars = spots;
+}
+function updateRadars(dt) {
+  if (!world.radars || state !== 'play') return;
+  const sp = Math.hypot(car.vx, car.vz);
+  for (const r of world.radars) {
+    r.cd -= dt;
+    if (r.cd > 0 || sp < RADAR_LIMIT) continue;
+    if (Math.abs(r.x - car.pos.x) > 14 || Math.abs(r.z - car.pos.z) > 14 || Math.hypot(r.x - car.pos.x, r.z - car.pos.z) > 13) continue;
+    r.cd = 8;
+    const fine = Math.min(cash, 50);
+    addCash(-fine);
+    el.flash.classList.remove('on'); void el.flash.offsetWidth; el.flash.classList.add('on');
+    sfxNoise(0.12, 0.3, 'highpass', 5000); blip(1800, 900, 0.1, 'square', 0.06, 0.05);
+    toast(`Photo radar ! ${Math.round(sp * 3.6)} km/h · amende ${fine} $`, 2000);
+  }
+}
+
+// ---------- Garage (menu) ----------
+function carThumb(id, color) {
+  const c = document.createElement('canvas');
+  c.width = 200; c.height = 80;
+  const g = c.getContext('2d'), v = VEHICLES[id], { low, glass } = vehicleShapes(v);
+  const k = 170 / v.L, ox = 100, oy = 72;
+  const draw = (shape, fill) => {
+    g.beginPath();
+    shape.getPoints(8).forEach((p, i) => { const x = ox - p.x * k, y = oy - p.y * k; if (i) g.lineTo(x, y); else g.moveTo(x, y); });
+    g.closePath(); g.fillStyle = fill; g.fill();
+  };
+  const css = '#' + new THREE.Color(color).getHexString();
+  draw(low, css);
+  g.fillStyle = css; g.fillRect(ox - v.zrf * k, oy - v.H * k, (v.zrf - v.zrr) * k, 5);
+  draw(glass, '#1e2a36');
+  for (const zc of [v.wb / 2, -v.wb / 2]) {
+    g.beginPath(); g.arc(ox - zc * k, oy - v.wr * k, v.wr * k, 0, Math.PI * 2); g.fillStyle = '#1b1d20'; g.fill();
+    g.beginPath(); g.arc(ox - zc * k, oy - v.wr * k, v.wr * k * 0.55, 0, Math.PI * 2); g.fillStyle = '#b9bec4'; g.fill();
+  }
+  return c;
+}
+function renderGarage() {
+  const box = $('cars');
+  if (!box) return;
+  setText($('garage-cash'), fmtCash(cash));
+  box.innerHTML = '';
+  for (const d of CARS) {
+    const mine = owned.has(d.id), cur = d.id === carId, color = carPaints[d.id] ?? d.color;
+    const card = document.createElement('div');
+    card.className = 'car-card' + (cur ? ' current' : '') + (mine ? '' : ' locked');
+    card.appendChild(carThumb(d.id, color));
+    const t = document.createElement('div');
+    t.className = 'car-name';
+    t.innerHTML = `${d.name} <span>${d.year}</span>`;
+    card.appendChild(t);
+    const bars = document.createElement('div');
+    bars.className = 'bars';
+    for (const [lab, val] of [['Vitesse', d.top / 56], ['Accélération', d.acc / 25], ['Tenue', d.grip / 15]]) {
+      bars.insertAdjacentHTML('beforeend', `<span>${lab}</span><i style="--v:${val.toFixed(2)}"></i>`);
+    }
+    card.appendChild(bars);
+    if (mine) {
+      const sw = document.createElement('div');
+      sw.className = 'swatches';
+      for (const p of PAINTS) {
+        const b = document.createElement('button');
+        b.type = 'button'; b.className = 'swatch' + (p === color ? ' on' : ''); b.style.background = '#' + new THREE.Color(p).getHexString();
+        b.setAttribute('aria-label', 'Couleur');
+        b.addEventListener('click', () => { carPaints[d.id] = p; store.set('paints', JSON.stringify(carPaints)); if (cur) setPlayerCar(d.id, p); renderGarage(); });
+        sw.appendChild(b);
+      }
+      card.appendChild(sw);
+    }
+    const btn = document.createElement('button');
+    btn.type = 'button'; btn.className = 'chip car-btn';
+    btn.textContent = cur ? 'Au volant' : mine ? 'Prendre ce char' : `Acheter · ${fmtCash(d.price)}`;
+    btn.disabled = cur || (!mine && cash < d.price);
+    btn.addEventListener('click', () => {
+      if (!mine) {
+        if (cash < d.price) return;
+        addCash(-d.price); owned.add(d.id); store.set('cars', [...owned].join(','));
+        blip(660, 1320, 0.2, 'square', 0.06); blip(990, 1980, 0.25, 'square', 0.06, 0.1);
+      }
+      setPlayerCar(d.id);
+      renderGarage();
+    });
+    card.appendChild(btn);
+    if (d.fare) card.insertAdjacentHTML('beforeend', '<p class="car-perk">Courses de taxi payées le double</p>');
+    box.appendChild(card);
+  }
+}
 
 // ---------- Voix : lit le nom de la rue quand on en change (voix québécoise si l'appareil en a une) ----------
 const synth = window.speechSynthesis || null;
@@ -5371,6 +5640,8 @@ function sayStreet(n) {
   lastSpoken = n; lastSpokenT = now;
   speak(gpsPhrase(n, turn));
 }
+setText(el.cash, fmtCash(cash));
+if (carId !== 'hatch' || carPaints.hatch != null) setPlayerCar(carId); else applyCarStats();
 function setVoice(on, announce) {
   voiceOn = on;
   store.set('voice', on ? 'on' : 'off');
@@ -5446,6 +5717,7 @@ function refreshMenu() {
   el.menuNote.textContent = best != null ? `Record sur cette carte${mode === 'chantier' ? ' en mode Chantiers' : ''} : ${fmt(best)}.` : 'Appuie sur Entrée pour démarrer.';
   el.start.textContent = gameActive ? 'Reprendre' : 'Démarrer';
   el.newGame.hidden = !gameActive;
+  renderGarage();
   $('map-' + world.id).checked = true;
   $('style-' + style).checked = true;
   $('mode-' + mode).checked = true;
@@ -5466,7 +5738,8 @@ function takeCoin(c, silent) {
   blip(1318, 2637, 0.2, 'square', 0.07, 0.07);
   const left = world.coins.length - collected;
   const tail = left === 0 ? 'dernière pièce !' : left === 1 ? 'plus qu\'une !' : `encore ${left}`;
-  toast(c.n ? `${c.n} · ${tail}` : `+1 pièce · ${tail}`, c.n ? 1800 : 1300);
+  addCash(25);
+  toast(c.n ? `${c.n} · +25 $ · ${tail}` : `+25 $ · ${tail}`, c.n ? 1800 : 1300);
   if (left === 0) win();
 }
 function win() {
@@ -5475,9 +5748,11 @@ function win() {
   const best = bestOf(recordKey());
   const isRecord = best == null || elapsed < best;
   if (isRecord) store.set('best-' + recordKey(), String(elapsed));
+  const bonus = 300 + (isRecord ? 200 : 0);
+  addCash(bonus);
   el.winLede.textContent = `Les ${world.coins.length} pièces ramassées en`;
   el.winTime.textContent = fmt(elapsed);
-  el.winBest.textContent = isRecord ? 'Nouveau record !' : `Record : ${fmt(best)}`;
+  el.winBest.textContent = (isRecord ? 'Nouveau record !' : `Record : ${fmt(best)}`) + ` · +${bonus} $`;
   $('win-eyebrow').textContent = ({ quebec: 'Arrivée · Vieux-Québec', plateau: 'Arrivée · Plateau-Mont-Royal' }[world.id] || 'Arrivée') + (mode === 'chantier' ? ' · Chantiers' : '');
   el.win.hidden = false;
   refreshMenu();
@@ -5870,7 +6145,7 @@ function updateEvents(t) {
     susp.v -= Math.min(impact, 20) * 0.12;
     if (impact > 7 && !reduceMotion) shake = Math.max(shake, Math.min(0.5, impact * 0.025));
     if (impact > 6) blip(160, 45, 0.25, 'sine', Math.min(0.5, impact * 0.03));
-    if (air > 0.5 && state !== 'menu') toast(`Saut ! ${air.toFixed(1)} s`, 1100);
+    if (air > 0.5 && state !== 'menu') { const gain = Math.round(air * 20); addCash(gain); toast(`Saut ! ${air.toFixed(1)} s · +${gain} $`, 1100); }
   }
   if (hitImpulse > 6 && t - lastThud > 0.3) {
     lastThud = t;
@@ -6230,6 +6505,8 @@ function frame() {
   updateEvents(t);
   updateCoins(t);
   updateNitros(dt, t);
+  updateBills(dt, t);
+  updateRadars(dt);
   updateFlyers(dt);
   updateCamera(dt, t);
   updateWorld(dt);
