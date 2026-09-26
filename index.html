@@ -423,7 +423,7 @@
   <section class="sign-panel" aria-labelledby="menu-title">
     <p class="eyebrow" id="menu-eyebrow">Départ · Centre-ville</p>
     <h1 id="menu-title">Mini Char 3D</h1>
-    <p class="lede">Prends le volant d'une petite voiture et ramasse les <strong id="menu-count">32 pièces d'or</strong> le plus vite possible. Les bonbonnes bleues donnent du nitro, et les touristes qui font signe veulent un taxi : arrête-toi à côté d'eux.</p>
+    <p class="lede">Prends le volant d'une petite voiture et ramasse les <strong id="menu-count">32 pièces d'or</strong> le plus vite possible. Les bonbonnes bleues donnent du nitro, et les touristes qui font signe veulent un taxi : arrête-toi à côté d'eux. Attention aux cyclistes et aux piétons !</p>
     <div class="options">
       <fieldset class="opt wide">
         <legend>Carte</legend>
@@ -2732,6 +2732,7 @@ function buildInventedWorld() {
   addBills(W, 18);
   addRadars(W, 2);
   buildPedestrians(W);
+  buildCyclists(W);
 
   // arbres et rochers
   const trees = [];
@@ -3174,6 +3175,7 @@ function buildRealWorld(id, D, cityStyle) {
   addBills(W, id === 'plateau' ? 45 : 32);
   addRadars(W, id === 'plateau' ? 6 : 4);
   buildPedestrians(W);
+  buildCyclists(W);
 
   // mini-carte (suit la voiture)
   const ext = { minX: M.x0, maxX: M.x0 + M.nx * M.cell, minZ: M.z0, maxZ: M.z0 + M.nz * M.cell };
@@ -3567,49 +3569,7 @@ function buildChantier(W) {
     return best;
   };
 
-  // cyclistes : sur les pistes cyclables d'abord, puis dans les rues sans chantier
-  const routes = [];
-  const route = (pts, off) => {
-    if (W.inRegion && pts.filter(p => W.inRegion(p[0], p[1], 15)).length < pts.length * 0.6) return;
-    const cum = [0];
-    for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
-    if (cum[cum.length - 1] >= 30) routes.push({ pts, cum, len: cum[cum.length - 1], off });
-  };
-  for (const b of W.bikeWays || []) route(b.pts, b.k === 0 ? Math.min(0.7, b.w / 4) : 0);
-  const nBike = routes.length;
-  for (const way of W.roadWays) if (!way.busy && (way.k === 1 || way.k === 3 || W.id === 'invente')) route(way.pts, way.w / 2 - 1.2);
-  const pickRoute = (lo, hi) => {
-    let total = 0;
-    for (let i = lo; i < hi; i++) total += routes[i].len;
-    let t = rand() * total;
-    for (let i = lo; i < hi; i++) { if (t < routes[i].len) return routes[i]; t -= routes[i].len; }
-    return routes[hi - 1];
-  };
-  const N = routes.length ? ({ plateau: 240, quebec: 90, invente: 80 }[W.id] ?? 80) : 0;
-  for (let i = 0; i < N; i++) {
-    const onBike = nBike > 0 && (i % 3 !== 2 || nBike === routes.length);
-    const R = onBike ? pickRoute(0, nBike) : pickRoute(nBike, routes.length);
-    C.cyclists.push({ R, s: rand() * R.len, dir: rand() < 0.5 ? 1 : -1, speed: rrange(3.8, 6.8), lat: R.off, stop: 0, wob: 0, hitCd: 0, k: 0, x: 0, z: 0, yaw: NaN });
-  }
-  if (C.cyclists.length) {
-    const n = C.cyclists.length, Gc = CYCLIST_GEO, Mc = CYCLIST_MATS;
-    const mk = (geo, pair, count) => {
-      const m = new THREE.InstancedMesh(geo, undefined, count);
-      reg(m, pair.normal, pair.retro);
-      m.castShadow = true; m.frustumCulled = false;
-      C.group.add(m);
-      return m;
-    };
-    C.cy = {
-      frame: mk(Gc.frame, Mc.frame, n), detail: mk(Gc.detail, Mc.detail, n), rider: mk(Gc.rider, Mc.rider, n), jersey: mk(Gc.jersey, Mc.jersey, n),
-      wheel: mk(Gc.wheel, Mc.detail, n * 2), thigh: mk(Gc.thigh, Mc.leg, n * 2), shin: mk(Gc.shin, Mc.leg, n * 2),
-    };
-    C.cyclists.forEach((c, i) => {
-      C.cy.jersey.setColorAt(i, pick(JERSEYS, rand()));
-      C.cy.frame.setColorAt(i, pick(BIKE_COLORS, rand()));
-      c.crank = rand() * 6.28; c.roll = 0;
-    });
-  }
+  C.cyclists = [];
   C.sites = sites.length;
   C.siteList = sites.filter(q => q.type !== 'lane').map(q => ({ x: q.x, z: q.z, r: (q.hideR || 16) + 5 }));
   resetChantier(C);
@@ -3965,56 +3925,132 @@ function updateFlyers(dt) {
     if (B.still) flyers.splice(i, 1);
   }
 }
-function updateChantier(C, dt, t) {
-  const G = world.ground;
-  let near = Infinity;
-  C.cyclists.forEach((c, i) => {
-    const R = c.R;
+// Foules « autour de toi » : piétons et cyclistes vivent dans un rayon de ~300 m ; celui qui s'éloigne réapparaît
+// sur un trottoir ou une piste proche (les rues touristiques ont plus de monde). Dense partout, pour pas cher.
+function routeBox(r) { let a = Infinity, b = -Infinity, c = Infinity, d = -Infinity; for (const [x, z] of r.pts) { a = Math.min(a, x); b = Math.max(b, x); c = Math.min(c, z); d = Math.max(d, z); } r.bb = [a, b, c, d]; }
+function nearPicker(routes, x, z, R) {
+  const near = routes.filter(r => x > r.bb[0] - R && x < r.bb[1] + R && z > r.bb[2] - R && z < r.bb[3] + R);
+  const list = near.length ? near : routes, cum = [];
+  let t = 0;
+  for (const r of list) { t += r.weight; cum.push(t); }
+  return () => { const u = Math.random() * t; let a = 0, b = cum.length - 1; while (a < b) { const m = (a + b) >> 1; if (cum[m] < u) a = m + 1; else b = m; } return list[a]; };
+}
+// ---------- Cyclistes : sur toutes les pistes et bandes cyclables, et dans les rues (dans toutes les parties) ----------
+function buildCyclists(W) {
+  seed = 97 + W.id.length * 1013;
+  const routes = [];
+  const route = (pts, off) => {
+    if (W.inRegion && pts.filter(p => W.inRegion(p[0], p[1], 15)).length < pts.length * 0.6) return;
+    const cum = [0];
+    for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+    if (cum[cum.length - 1] >= 30) { const r = { pts, cum, len: cum[cum.length - 1], off, weight: cum[cum.length - 1] * (bikeRoute ? 3 : 1) }; routeBox(r); routes.push(r); }
+  };
+  let bikeRoute = true;
+  for (const b of W.bikeWays || []) route(b.pts, b.k === 0 ? Math.min(0.7, b.w / 4) : 0);
+  bikeRoute = false;
+  const nBike = routes.length;
+  for (const way of W.roadWays) if (way.k <= 1 || way.k === 3) route(way.pts, way.w / 2 - 1.2);
+  if (!routes.length) return;
+  const cumW = (lo, hi) => { const c = []; let t = 0; for (let i = lo; i < hi; i++) { t += routes[i].len; c.push(t); } return c; };
+  const cBike = cumW(0, nBike), cRoad = cumW(nBike, routes.length);
+  const pickRoute = (c, lo) => { const t = rand() * c[c.length - 1]; let a = 0, b = c.length - 1; while (a < b) { const m = (a + b) >> 1; if (c[m] < t) a = m + 1; else b = m; } return routes[lo + a]; };
+  const N = { plateau: 320, quebec: 240, invente: 170 }[W.id] ?? 200, list = [];
+  for (let i = 0; i < N; i++) {
+    const onBike = nBike > 0 && (i % 3 !== 2 || nBike === routes.length) && cBike.length;
+    const R = onBike ? pickRoute(cBike, 0) : cRoad.length ? pickRoute(cRoad, nBike) : pickRoute(cBike, 0);
+    list.push({ R, s: rand() * R.len, dir: rand() < 0.5 ? 1 : -1, speed: rrange(3.8, 6.8), lat: R.off, stop: 0, wob: 0, hitCd: 0, k: 0, x: 0, z: 0, yaw: NaN, hidden: false });
+  }
+  const n = list.length, Gc = CYCLIST_GEO, Mc = CYCLIST_MATS;
+  const mk = (geo, pair, count) => {
+    const m = new THREE.InstancedMesh(geo, undefined, count);
+    reg(m, pair.normal, pair.retro);
+    m.castShadow = true; m.frustumCulled = false;
+    W.group.add(m);
+    return m;
+  };
+  const cy = {
+    frame: mk(Gc.frame, Mc.frame, n), detail: mk(Gc.detail, Mc.detail, n), rider: mk(Gc.rider, Mc.rider, n), jersey: mk(Gc.jersey, Mc.jersey, n),
+    wheel: mk(Gc.wheel, Mc.detail, n * 2), thigh: mk(Gc.thigh, Mc.leg, n * 2), shin: mk(Gc.shin, Mc.leg, n * 2),
+  };
+  list.forEach((c, i) => {
+    cy.jersey.setColorAt(i, pick(JERSEYS, rand()));
+    cy.frame.setColorAt(i, pick(BIKE_COLORS, rand()));
+    c.crank = rand() * 6.28; c.roll = 0;
+  });
+  W.cyc = { cyclists: list, cy, routes, pick: null, pickT: 0 };
+}
+// avance le long du parcours (à droite du sens de marche) ; demi-tour au bout
+function cyclistStep(c, dt, snapYaw) {
+  const R = c.R;
+  if (c.stop > 0) c.stop -= dt;
+  else {
+    c.s += c.dir * c.speed * dt;
+    if (c.s >= R.len || c.s <= 0) { c.s = clamp(c.s, 0, R.len); c.dir = -c.dir; c.lat = -c.lat; }
+  }
+  c.lat = lerp(c.lat, R.off, 1 - Math.exp(-1.5 * dt));
+  let k = c.k;
+  while (k < R.cum.length - 2 && R.cum[k + 1] < c.s) k++;
+  while (k > 0 && R.cum[k] > c.s) k--;
+  c.k = k;
+  const [ax, az] = R.pts[k], [bx, bz] = R.pts[k + 1], L = (R.cum[k + 1] - R.cum[k]) || 1, f = clamp((c.s - R.cum[k]) / L, 0, 1);
+  const tx = ((bx - ax) / L) * c.dir, tz = ((bz - az) / L) * c.dir;
+  c.x = ax + (bx - ax) * f - tz * c.lat;
+  c.z = az + (bz - az) * f + tx * c.lat;
+  const yawT = Math.atan2(tx, tz);
+  c.yaw = Number.isNaN(c.yaw) || snapYaw ? yawT : lerpAngle(c.yaw, yawT, 1 - Math.exp(-6 * dt));
+}
+function respawnCyclist(Y, c, minD) {
+  for (let tries = 0; tries < 5; tries++) {
+    const R = Y.pick();
+    c.R = R; c.s = Math.random() * R.len; c.k = 0; c.dir = Math.random() < 0.5 ? 1 : -1; c.lat = R.off; c.stop = 0; c.wob = 0;
+    cyclistStep(c, 0, true);
+    if (Math.hypot(c.x - car.pos.x, c.z - car.pos.z) > minD) break;
+  }
+}
+function updateCyclists(dt, t) {
+  const Y = world.cyc;
+  if (!Y) return;
+  const G = world.ground, K = Y.cy;
+  let near = Infinity, respawns = 0;
+  Y.pickT -= dt;
+  if (!Y.pick || Y.pickT <= 0) { Y.pick = nearPicker(Y.routes, car.pos.x, car.pos.z, 320); Y.pickT = 1.5; }
+  Y.cyclists.forEach((c, i) => {
     c.hitCd -= dt;
-    if (c.fly) { near = Math.min(near, flyCyclist(C, c, i, dt)); return; }
+    if (c.fly) { near = Math.min(near, flyCyclist(Y, c, i, dt)); return; }
+    const dm = Math.abs(c.x - car.pos.x) + Math.abs(c.z - car.pos.z);
+    if (dm > 480 && !Number.isNaN(c.yaw) && respawns < 6) { respawns++; respawnCyclist(Y, c, 140); }   // trop loin : il réapparaît plus près
     // le cycliste s'arrête s'il a la voiture juste devant lui
     const hx = Math.sin(c.yaw || 0), hz = Math.cos(c.yaw || 0), qx = car.pos.x - c.x, qz = car.pos.z - c.z;
     const ahead = qx * hx + qz * hz, side = Math.abs(qx * hz - qz * hx);
     if (ahead > 0 && ahead < 4.2 && side < 2) c.stop = Math.max(c.stop, 0.3);
-    if (c.stop > 0) c.stop -= dt;
-    else {
-      c.s += c.dir * c.speed * dt;
-      if (c.s >= R.len || c.s <= 0) { c.s = clamp(c.s, 0, R.len); c.dir = -c.dir; c.lat = -c.lat; }   // demi-tour en douceur
-    }
-    c.lat = lerp(c.lat, R.off, 1 - Math.exp(-1.5 * dt));
-    let k = c.k;
-    while (k < R.cum.length - 2 && R.cum[k + 1] < c.s) k++;
-    while (k > 0 && R.cum[k] > c.s) k--;
-    c.k = k;
-    const [ax, az] = R.pts[k], [bx, bz] = R.pts[k + 1], L = (R.cum[k + 1] - R.cum[k]) || 1, f = clamp((c.s - R.cum[k]) / L, 0, 1);
-    const tx = ((bx - ax) / L) * c.dir, tz = ((bz - az) / L) * c.dir;
-    c.x = ax + (bx - ax) * f - tz * c.lat;                        // à droite du sens de marche
-    c.z = az + (bz - az) * f + tx * c.lat;
-    const yawT = Math.atan2(tx, tz);
-    c.yaw = Number.isNaN(c.yaw) ? yawT : lerpAngle(c.yaw, yawT, 1 - Math.exp(-6 * dt));
+    cyclistStep(c, dt, false);
     c.wob = Math.max(0, c.wob - dt);
     const lean = c.wob > 0 ? Math.sin(t * 16) * 0.3 * c.wob : Math.sin(t * 1.7 + i) * 0.035;
     _e.set(0, c.yaw, lean, 'YXZ');
     _cq.setFromEuler(_e); _cp.set(c.x, G(c.x, c.z), c.z);
     _cm.compose(_cp, _cq, ONE);
-    const K = C.cy;
     K.frame.setMatrixAt(i, _cm); K.detail.setMatrixAt(i, _cm); K.rider.setMatrixAt(i, _cm); K.jersey.setMatrixAt(i, _cm);
     if (c.stop <= 0) { c.roll += (c.speed * dt) / BIKE.wr; c.crank += ((c.speed * dt) / BIKE.wr) * 0.42; }
-    for (let w = 0; w < 2; w++) {                                  // roues qui tournent
+    for (let w = 0; w < 2; w++) {                                    // roues qui tournent
       _lm.makeRotationX(c.roll).setPosition(0, BIKE.wr, w ? BIKE.front : BIKE.rear);
       K.wheel.setMatrixAt(i * 2 + w, _wm.multiplyMatrices(_cm, _lm));
     }
-    for (let s = 0; s < 2; s++) {                                  // jambes qui pédalent
-      legSegments(s ? -1 : 1, c.crank + s * Math.PI);
-      K.thigh.setMatrixAt(i * 2 + s, _wm.multiplyMatrices(_cm, segMatrix(_hip, _knee, _lm)));
-      K.shin.setMatrixAt(i * 2 + s, _wm.multiplyMatrices(_cm, segMatrix(_knee, _foot, _lm)));
+    for (let sd = 0; sd < 2; sd++) {                                 // jambes qui pédalent
+      legSegments(sd ? -1 : 1, c.crank + sd * Math.PI);
+      K.thigh.setMatrixAt(i * 2 + sd, _wm.multiplyMatrices(_cm, segMatrix(_hip, _knee, _lm)));
+      K.shin.setMatrixAt(i * 2 + sd, _wm.multiplyMatrices(_cm, segMatrix(_knee, _foot, _lm)));
     }
-    near = Math.min(near, Math.abs(c.x - car.pos.x) + Math.abs(c.z - car.pos.z));
+    near = Math.min(near, dm);
   });
-  if (C.cy) for (const m of Object.values(C.cy)) m.instanceMatrix.needsUpdate = true;
-  bellCd -= dt; clonkCd -= dt;
+  for (const m of Object.values(K)) m.instanceMatrix.needsUpdate = true;
+  bellCd -= dt;
   const sp = Math.hypot(car.vx, car.vz);
   if (state === 'play' && near < 5 && sp > 9 && bellCd <= 0) { bell(); bellCd = 3; }
+}
+function updateChantier(C, dt, t) {
+  const G = world.ground;
+  clonkCd -= dt;
+  const sp = Math.hypot(car.vx, car.vz);
   // cônes : on les renverse en roulant dessus
   if (sp > 1.5 && state !== 'menu') {
     const fx = Math.sin(car.yaw), fz = Math.cos(car.yaw);
@@ -4931,9 +4967,8 @@ function resolveCollisions() {
     const off = s ? -car.span : car.span;
     collideGrid(world.grid, fx, fz, off);
     if (world.parked) collideParked(world.parked, car.pos.x + fx * off, car.pos.z + fz * off);
-    if (!site) continue;
-    collideGrid(site.grid, fx, fz, off);
-    for (const c of site.cyclists) {                               // un cycliste percuté est projeté dans les airs
+    if (site) collideGrid(site.grid, fx, fz, off);
+    if (world.cyc) for (const c of world.cyc.cyclists) {            // un cycliste percuté est projeté dans les airs
       if (c.fly) continue;
       const ex = car.pos.x + fx * off - c.x, ez = car.pos.z + fz * off - c.z, rr = 0.75 + CAR_R;
       if (ex > rr || ex < -rr || ez > rr || ez < -rr) continue;
@@ -5043,6 +5078,7 @@ function resetCrashes() {
   crash = null;
   if (world.resetTrees) world.resetTrees();
   flyers.length = 0;
+  if (world.cyc) for (const cy of world.cyc.cyclists) { cy.stop = 0; cy.wob = 0; cy.hitCd = 0; cy.fly = null; }
 }
 
 function wallBounce(ox, oz) {
@@ -5560,8 +5596,8 @@ const PED_GEO = (() => {
       { geo: new THREE.CylinderGeometry(0.16, 0.17, 0.2, 10).scale(1.15, 1, 0.8).translate(0, 0.86, 0), color: gray(0.35) },
     ]),
     head: mergeParts([
-      { geo: new THREE.SphereGeometry(0.115, 12, 10).translate(0, 1.64, 0.01), color: W1 },
-      { geo: new THREE.SphereGeometry(0.12, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.55).translate(0, 1.66, -0.01), color: gray(0.25) },
+      { geo: new THREE.SphereGeometry(0.115, 9, 7).translate(0, 1.64, 0.01), color: W1 },
+      { geo: new THREE.SphereGeometry(0.12, 9, 5, 0, Math.PI * 2, 0, Math.PI * 0.55).translate(0, 1.66, -0.01), color: gray(0.25) },
       { geo: new THREE.CylinderGeometry(0.05, 0.06, 0.1, 8).translate(0, 1.5, 0), color: W1 },
     ]),
     leg: mergeParts([
@@ -5620,7 +5656,15 @@ function buildPedestrians(W) {
   }
   scored.sort((a, b) => b.score - a.score);
   const routes = [];
-  for (const { way, score } of scored.slice(0, { plateau: 36, quebec: 36 }[W.id] ?? 24)) {
+  const touristy = new Set(scored.slice(0, { plateau: 36, quebec: 36 }[W.id] ?? 24).map(q => q.way));
+  // tous les trottoirs : les rues touristiques pèsent beaucoup plus lourd
+  const all = scored.filter(q => touristy.has(q.way));
+  for (const way of W.roadWays) {
+    if (touristy.has(way) || way.k > 2 || way.pts.length < 2) continue;
+    if (W.inRegion && !W.inRegion(way.pts[0][0], way.pts[0][1], -5)) continue;
+    all.push({ way, score: 0.9 });
+  }
+  for (const { way, score } of all) {
     const sides = way.k === 2 ? [0] : [1, -1];
     for (const sd of sides) {
       const off = way.k === 2 ? 0 : way.w / 2 + 1.5;
@@ -5630,13 +5674,16 @@ function buildPedestrians(W) {
       });
       const cum = [0];
       for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
-      routes.push({ pts, cum, len: cum[cum.length - 1], wide: way.k === 2 ? way.w / 2 - 1 : 0.6, weight: score * cum[cum.length - 1] });
+      if (cum[cum.length - 1] > 20) { const r = { pts, cum, len: cum[cum.length - 1], wide: way.k === 2 ? way.w / 2 - 1 : 0.6, weight: score * cum[cum.length - 1] }; routeBox(r); routes.push(r); }
     }
   }
   if (!routes.length) return;
-  const N = { plateau: 300, quebec: 380, invente: 80 }[W.id] ?? 90, list = [];
+  const N = { plateau: 850, quebec: 850, invente: 360 }[W.id] ?? 400, list = [];
+  const cum = []; let tot = 0;
+  for (const r of routes) { tot += r.weight; cum.push(tot); }
+  const pickR = () => { const t = rand() * tot; let a = 0, b = cum.length - 1; while (a < b) { const m = (a + b) >> 1; if (cum[m] < t) a = m + 1; else b = m; } return routes[a]; };
   for (let i = 0; i < N; i++) {
-    const R = pickW(routes.map(r => [r, r.weight]), rand()), tourist = rand() < 0.38;   // plus de monde dans les rues les plus touristiques
+    const R = pickR(), tourist = R.weight / R.len > 2 ? rand() < 0.45 : rand() < 0.08;   // plus de monde (et de touristes) dans les rues touristiques
     list.push({
       R, s: rand() * R.len, dir: rand() < 0.5 ? 1 : -1, speed: rrange(1.0, 1.55), lat: rrange(-R.wide, R.wide), tourist,
       x: 0, z: 0, y: 0, yaw: 0, phase: rand() * 6.28, pause: 0, photo: 0, dodge: null, down: 0, fall: 0, jump: 0, hail: false, gone: false, i,
@@ -5664,7 +5711,7 @@ function buildPedestrians(W) {
   // enseignes « TAXI ! » au-dessus des clients qui font signe
   const signMat = new THREE.SpriteMaterial({ map: taxiSignTex, depthTest: true, transparent: true });
   const signs = [0, 1, 2].map(() => { const sp = new THREE.Sprite(signMat); sp.scale.set(1.6, 0.8, 1); sp.visible = false; W.group.add(sp); return sp; });
-  W.peds = { list, M, routes, signs, hail: [], fare: null, hintShown: false };
+  W.peds = { list, M, routes, signs, hail: [], fare: null, hintShown: false, pick: null, pickT: 0 };
 }
 const _pdm = new THREE.Matrix4(), _pdm2 = new THREE.Matrix4(), _pdm3 = new THREE.Matrix4(), _pdq = new THREE.Quaternion(), _pdp = new THREE.Vector3(), _pde = new THREE.Euler();
 function pedPose(R, p) {
@@ -5675,18 +5722,42 @@ function pedPose(R, p) {
   return [ax + (bx - ax) * f - tz * p.lat, az + (bz - az) * f + tx * p.lat, Math.atan2(tx, tz)];
 }
 let pedHitCd = 0, heyCd = 0;
+function respawnPed(PS, p, minD) {
+  for (let tries = 0; tries < 5; tries++) {
+    const R = PS.pick();
+    p.R = R; p.s = Math.random() * R.len; p.dir = Math.random() < 0.5 ? 1 : -1; p.lat = (Math.random() * 2 - 1) * R.wide;
+    [p.x, p.z, p.yaw] = pedPose(R, p);
+    if (Math.hypot(p.x - car.pos.x, p.z - car.pos.z) > minD) break;
+  }
+  p.pause = 0; p.photo = 0; p.dodge = null; p.down = 0; p.fall = 0; p.jump = 0;
+  p.y = world.ground(p.x, p.z);
+}
+// nouvelle partie : toute la foule autour du point de départ
+function scatterCrowds() {
+  const PS = world.peds, Y = world.cyc;
+  if (PS) { PS.pick = nearPicker(PS.routes, car.pos.x, car.pos.z, 300); PS.pickT = 1.5; for (const p of PS.list) if (p.R && !p.gone) respawnPed(PS, p, 0); }
+  if (Y) { Y.pick = nearPicker(Y.routes, car.pos.x, car.pos.z, 320); Y.pickT = 1.5; for (const c of Y.cyclists) if (!c.fly) respawnCyclist(Y, c, 0); }
+}
 function updatePeds(dt, t) {
   const PS = world.peds;
   if (!PS) return;
   const M = PS.M, G = world.ground, sp = Math.hypot(car.vx, car.vz);
   const cfx = sp > 0.5 ? car.vx / sp : Math.sin(car.yaw), cfz = sp > 0.5 ? car.vz / sp : Math.cos(car.yaw);
   pedHitCd -= dt; heyCd -= dt;
+  PS.pickT -= dt;
+  if (!PS.pick || PS.pickT <= 0) { PS.pick = nearPicker(PS.routes, car.pos.x, car.pos.z, 300); PS.pickT = 1.5; }
+  let respawns = 0;
   updateTaxi(dt, t);
   for (const p of PS.list) {
     const i = p.i;
     if (p.gone) continue;
-    const far = Math.abs(p.x - car.pos.x) + Math.abs(p.z - car.pos.z) > 320;
-    if (far && !p.hail && p.R) { if ((i + Math.floor(t * 4)) % 8) continue; }  // loin : on anime moins souvent
+    const dm = Math.abs(p.x - car.pos.x) + Math.abs(p.z - car.pos.z);
+    if (dm > 420 && p.R && !p.hail && respawns < 10) { respawns++; respawnPed(PS, p, 120); }   // trop loin : il réapparaît plus près
+    else if (dm > 330) {                                               // loin (touristes des lieux célèbres) : pas dessiné
+      if (!p.hidden) { p.hidden = true; pedMatrices(p, ZERO_M); }
+      continue;
+    }
+    p.hidden = false;
     let walking = false;
     // voiture qui fonce dessus : on saute de côté
     const ex = p.x - car.pos.x, ez = p.z - car.pos.z, ahead = ex * cfx + ez * cfz, lat = ex * cfz - ez * cfx;
@@ -5760,15 +5831,15 @@ function honk() {
   horn(0.14);
   const PS = world.peds;
   if (PS) for (const p of PS.list) if (!p.gone && !p.down && Math.hypot(p.x - car.pos.x, p.z - car.pos.z) < 25) { p.jump = 0.45; p.pause = Math.max(p.pause, 0.8); }
-  if (world.siteOn && world.site.cyclists.some(c => !c.fly && Math.hypot(c.x - car.pos.x, c.z - car.pos.z) < 25)) setTimeout(bell, 350);
+  if (world.cyc && world.cyc.cyclists.some(c => !c.fly && Math.hypot(c.x - car.pos.x, c.z - car.pos.z) < 25)) setTimeout(bell, 350);
 }
-function pedHide(p) {
+function pedMatrices(p, m) {
   const M = world.peds.M;
-  p.gone = true;
-  M.body.setMatrixAt(p.i, ZERO_M); M.head.setMatrixAt(p.i, ZERO_M);
-  for (let s = 0; s < 2; s++) { M.leg.setMatrixAt(p.i * 2 + s, ZERO_M); M.arm.setMatrixAt(p.i * 2 + s, ZERO_M); }
-  if (p.tourist) { M.pack.setMatrixAt(p.ti, ZERO_M); M.hat.setMatrixAt(p.ti, ZERO_M); M.cam.setMatrixAt(p.ti, ZERO_M); }
+  M.body.setMatrixAt(p.i, m); M.head.setMatrixAt(p.i, m);
+  for (let s = 0; s < 2; s++) { M.leg.setMatrixAt(p.i * 2 + s, m); M.arm.setMatrixAt(p.i * 2 + s, m); }
+  if (p.tourist) { M.pack.setMatrixAt(p.ti, m); M.hat.setMatrixAt(p.ti, m); M.cam.setMatrixAt(p.ti, m); }
 }
+function pedHide(p) { p.gone = true; pedMatrices(p, ZERO_M); }
 
 // ---------- Taxi : des touristes font signe ; arrête-toi près d'eux, le GPS t'amène à leur destination ----------
 function updateTaxi(dt, t) {
@@ -5781,7 +5852,7 @@ function updateTaxi(dt, t) {
     const p = PS.list[Math.floor(Math.random() * PS.list.length)];
     if (!p.R || p.gone || p.hail || p.down || p.fixed) continue;
     const d = Math.hypot(p.x - car.pos.x, p.z - car.pos.z);
-    if (d < 60 || d > 700) continue;
+    if (d < 60 || d > 300) continue;
     p.hail = true; p.pause = 0; p.photo = 0; p.lat = p.R.wide + 0.4;
     PS.hail.push(p);
   }
@@ -5810,7 +5881,8 @@ function startFare(p) {
     if (places.length) q = places[Math.floor(Math.random() * places.length)];
     else { const s = randomSpot(); q = { x: s.x, z: s.z, n: 'la destination' }; }
     const d = Math.hypot(q.x - car.pos.x, q.z - car.pos.z);
-    if (d > 400 && d < 1600 && (!world.inRegion || world.inRegion(q.x, q.z, -10))) dest = { x: q.x, z: q.z, label: q.n };
+    const [dMin, dMax] = places.length ? [400, 1600] : [150, 700];      // le monde inventé est plus petit
+    if (d > dMin && d < dMax && (!world.inRegion || world.inRegion(q.x, q.z, -10))) dest = { x: q.x, z: q.z, label: q.n };
   }
   if (!dest) { p.gone = false; return; }
   const d0 = Math.hypot(dest.x - car.pos.x, dest.z - car.pos.z);
@@ -5982,7 +6054,7 @@ for (const [id, rw] of Object.entries(REAL_WORLDS)) {
   WORLD_INFO[id].note = `Données introuvables : lance « node tools/build-city.mjs » pour générer ${rw.file}.`;
 }
 const available = id => id === 'invente' || !!(REAL_WORLDS[id] && REAL_WORLDS[id].data()?.roads);
-const MODE_NOTE = 'Mode Chantiers : des cônes orange, des clôtures et des barrières clignotantes partout (fonce dedans, tout ça s’envole), pelles mécaniques, bosses de terre et tremplins, et des cyclistes sur toutes les pistes cyclables et dans les rues. Un cycliste percuté s’envole avec son vélo, et ça coûte 5 secondes.';
+const MODE_NOTE = 'Mode Chantiers : des cônes orange, des clôtures et des barrières clignotantes partout (fonce dedans, tout ça s’envole), pelles mécaniques, bosses de terre et tremplins, et encore plus de cyclistes.';
 
 let state = 'menu';             // menu | play | won
 let gameActive = false;         // une partie est en cours (menu = pause)
@@ -6062,6 +6134,7 @@ function resetRun() {
   if (world.siteOn) resetChantier(world.site);
   resetCrashes();
   respawn(false);
+  scatterCrowds();
   clearSkids();
 }
 function play() {
@@ -6796,6 +6869,7 @@ function frame() {
   if (state === 'play') elapsed += dt;
   const drifting = updateCarVisual(dt, inp);
   updateBlink(t);
+  updateCyclists(dt, t);
   if (world.siteOn) updateChantier(world.site, dt, t);
   updateParked(dt, t);
   updateDebris(dt);
