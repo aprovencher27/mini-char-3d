@@ -184,6 +184,28 @@
   .lede strong { color: var(--coin); font-weight: 700; }
   .options { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px 14px; margin: 0 0 8px; }
   .voice-note { margin: 0 0 14px; }
+  .goto-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin: 6px 0 6px; }
+  .goto-row label { font-size: 12px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; opacity: 0.85; }
+  #goto-input {
+    flex: 1 1 240px; min-width: 0; padding: 8px 11px; border-radius: 8px; border: 2px solid var(--sign-white);
+    background: var(--sign-white); color: var(--ink); font: 600 15px var(--font-ui); user-select: text; -webkit-user-select: text;
+  }
+  .goto-note { margin: 0 0 12px; }
+  body.retro .goto-row label { font-family: var(--font-display); font-size: 9px; }
+  body.retro #goto-input { background: var(--sign-green); color: var(--sign-white); font-size: 18px; }
+  /* GPS : prochaine manœuvre, sous le panneau de rue */
+  #nav {
+    left: 50%; top: calc(var(--top) + 96px); transform: translateX(-50%);
+    display: flex; align-items: center; gap: 12px; padding: 8px 16px 8px 12px; border-radius: 12px;
+    background: rgba(40, 20, 90, 0.86); color: #ffffff; box-shadow: 0 8px 22px rgba(0, 0, 0, 0.3);
+  }
+  #nav-arrow { font-size: 40px; line-height: 1; font-weight: 700; }
+  .nav-txt { display: flex; flex-direction: column; }
+  #nav-dist { font-size: 22px; font-weight: 700; line-height: 1.1; }
+  #nav-street { font-size: 14px; font-weight: 600; opacity: 0.9; max-width: 260px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  body.retro #nav { background: var(--glass-strong); box-shadow: 0 0 16px rgba(57, 255, 20, 0.5); color: #39ff14; }
+  body.retro #nav-dist { font-family: var(--font-display); font-size: 14px; }
+  @media (max-width: 820px) { #nav { top: calc(var(--top) + 270px); } }
   .voice-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin: 0 0 6px; }
   .voice-row label { font-size: 12px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; opacity: 0.85; }
   #voice-select {
@@ -326,11 +348,14 @@
   <span class="k" id="best-k" hidden>Record</span><span class="v" id="best" hidden></span>
 </div>
 
+<div id="nav" class="hud" hidden><span id="nav-arrow">↱</span><span class="nav-txt"><strong id="nav-dist">0 m</strong><span id="nav-street"></span></span></div>
+
 <div id="speedo" class="hud" aria-label="Vitesse"><span id="speed">0</span><span class="unit">km/h</span></div>
 
 <div id="mapwrap" class="hud">
   <canvas id="minimap" width="256" height="256" aria-label="Carte"></canvas>
   <div class="chips">
+    <button class="chip" id="btn-goto" type="button"><kbd>T</kbd>Adresse</button>
     <button class="chip" id="btn-cam" type="button"><kbd>C</kbd>Caméra</button>
     <button class="chip" id="btn-sound" type="button"><kbd>M</kbd><span id="sound-label">Son : oui</span></button>
     <button class="chip" id="btn-menu" type="button"><kbd>Échap</kbd>Menu</button>
@@ -388,6 +413,13 @@
         </div>
       </fieldset>
       <fieldset class="opt">
+        <legend>Départ</legend>
+        <div class="seg">
+          <label><input type="radio" name="start" value="hasard" id="start-hasard"><span>Au hasard</span></label>
+          <label><input type="radio" name="start" value="fixe" id="start-fixe"><span>Point fixe</span></label>
+        </div>
+      </fieldset>
+      <fieldset class="opt">
         <legend>Voix des rues</legend>
         <div class="seg">
           <label><input type="radio" name="voice" value="on" id="voice-on"><span>Oui</span></label>
@@ -395,6 +427,14 @@
         </div>
       </fieldset>
     </div>
+    <div class="goto-row">
+      <label for="goto-input">Aller à</label>
+      <input id="goto-input" list="goto-list" type="text" placeholder="4200 rue Saint-Denis, Schwartz's, Château Frontenac…" autocomplete="off" spellcheck="false">
+      <button id="goto-nav" class="chip" type="button">Itinéraire GPS</button>
+      <button id="goto-tp" class="chip" type="button">Téléporter</button>
+      <datalist id="goto-list"></datalist>
+    </div>
+    <p class="fine goto-note" id="goto-note">Tape une adresse ou un lieu : le GPS t'y guide à la voix (flèches sur la chaussée, tracé sur la carte).</p>
     <div class="voice-row">
       <label for="voice-select">Voix</label>
       <select id="voice-select"></select>
@@ -415,6 +455,7 @@
       <dt><kbd>V</kbd></dt><dd>Voix des rues</dd>
       <dt><kbd>Échap</kbd></dt><dd>Menu</dd>
       <dt><kbd>N</kbd><kbd>Maj</kbd></dt><dd>Nitro</dd>
+      <dt><kbd>T</kbd></dt><dd>Aller à une adresse</dd>
     </dl>
     <p class="touch-help">◀ ▶ pour tourner, ▲ pour accélérer, ▼ pour freiner et reculer, <strong>Drift</strong> pour le frein à main, <strong>N₂O</strong> pour le nitro. La carte en haut à droite montre les pièces restantes.</p>
     <div class="actions">
@@ -2407,13 +2448,13 @@ const MAP_PAL = {
     bg: '#8d9a86', land: [196, 190, 176], grass: [118, 168, 86], water: [92, 156, 208], rock: [150, 142, 128],
     building: '#8f877d', pad: '#bdb7ab', road: '#f7f4ea', major: '#fff1c2', ped: '#e3d3b6', wall: '#7a5f43',
     ramp: '#ffb703', coin: '#ffc83d', coinLine: '#12171c', car: '#d62f2f', carLine: '#ffffff', text: 'rgba(18,23,28,0.8)', bike: '#2f9a55',
-    outside: 'rgba(38,44,50,0.5)', limit: '#1f4f8f', nitro: '#1d8fff',
+    outside: 'rgba(38,44,50,0.5)', limit: '#1f4f8f', nitro: '#1d8fff', route: '#7c3aed',
   },
   retro: {
     bg: '#0b0217', land: [18, 7, 34], grass: [10, 38, 34], water: [8, 18, 60], rock: [44, 16, 66],
     building: '#2c1257', pad: '#1a0b33', road: '#ff2bd6', major: '#ff6ae4', ped: '#a44ad0', wall: '#29f3ff',
     ramp: '#ffe45c', coin: '#ffe45c', coinLine: '#0b0217', car: '#29f3ff', carLine: '#ffffff', text: 'rgba(41,243,255,0.85)', bike: '#39ff14',
-    outside: 'rgba(4,0,10,0.62)', limit: '#ffe45c', nitro: '#29f3ff',
+    outside: 'rgba(4,0,10,0.62)', limit: '#ffe45c', nitro: '#29f3ff', route: '#39ff14',
   },
 };
 // classify(x, z) renvoie « classe + nuance » : 0 ville, 1 verdure, 2 eau, 3 roche ; la partie décimale éclaircit
@@ -4325,6 +4366,129 @@ const flames = (() => {
   return { g, parts };
 })();
 
+// =====================================================================
+// Réseau routier en graphe : nœuds tous les ~8 m le long des rues, reliés aux croisements.
+// Sert à l'itinéraire GPS et à la circulation.
+// =====================================================================
+function buildRoadGraph(W) {
+  const ways = W.roadWays.filter(w => w.k <= 1 && w.pts.length >= 2);
+  const inside = (x, z) => !W.inRegion || W.inRegion(x, z, 6);
+  // 1) points de croisement : intersections de segments, et bouts de rue qui touchent le milieu d'une autre
+  const segGrid = new Grid(30), cuts = ways.map(w => w.pts.map(() => []));
+  ways.forEach((w, i) => { for (let j = 0; j < w.pts.length - 1; j++) { const [ax, az] = w.pts[j], [bx, bz] = w.pts[j + 1]; segGrid.add([i, j], Math.min(ax, bx) - 4, Math.min(az, bz) - 4, Math.max(ax, bx) + 4, Math.max(az, bz) + 4); } });
+  const seen = new Set();
+  ways.forEach((w, i) => {
+    for (let j = 0; j < w.pts.length - 1; j++) {
+      const [ax, az] = w.pts[j], [bx, bz] = w.pts[j + 1];
+      const near = new Set();
+      for (const q of densify([[ax, az], [bx, bz]], 25)) for (const it of segGrid.at(q[0], q[1])) near.add(it);
+      for (const [i2, j2] of near) {
+        if (i2 <= i) continue;
+        const key = i * 100000 + j + '|' + i2 * 100000 + j2;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const [cx, cz] = ways[i2].pts[j2], [dx, dz] = ways[i2].pts[j2 + 1];
+        const hit = segIntersect(ax, az, bx, bz, cx, cz, dx, dz);
+        if (hit) { cuts[i][j].push(hit); cuts[i2][j2].push(hit); continue; }
+        // bout de rue (T) : à moins de 4 m du segment de l'autre
+        for (const [e, own, other, oi, oj] of [[[ax, az], j === 0, [cx, cz, dx, dz], i2, j2], [[bx, bz], j === w.pts.length - 2, [cx, cz, dx, dz], i2, j2],
+          [[cx, cz], j2 === 0, [ax, az, bx, bz], i, j], [[dx, dz], j2 === ways[i2].pts.length - 2, [ax, az, bx, bz], i, j]]) {
+          if (!own) continue;
+          const [d, px, pz] = closestOnSeg(e[0], e[1], { ax: other[0], az: other[1], bx: other[2], bz: other[3] });
+          if (d < 4) { cuts[oi][oj].push([px, pz]); if (oi === i2) cuts[i][j].push([px, pz]); else cuts[i2][j2].push([px, pz]); }   // les deux rues partagent le même point
+        }
+      }
+    }
+  });
+  // 2) nœuds (fusionnés à moins de 1,5 m) et arêtes
+  const X = [], Z = [], adj = [], nodeGrid = new Grid(6);
+  const node = (x, z, snap) => {
+    const ci = Math.floor(x / 6), cj = Math.floor(z / 6);
+    for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) for (const id of nodeGrid.at((ci + di) * 6 + 3, (cj + dj) * 6 + 3)) {
+      if (Math.abs(X[id] - x) < snap && Math.abs(Z[id] - z) < snap) return id;
+    }
+    const id = X.length;
+    X.push(x); Z.push(z); adj.push([]);
+    nodeGrid.add(id, x, z, x, z);
+    return id;
+  };
+  const link = (a, b) => { if (a !== b && !adj[a].includes(b)) { adj[a].push(b); adj[b].push(a); } };
+  ways.forEach((w, i) => {
+    const pts = [];
+    for (let j = 0; j < w.pts.length - 1; j++) {
+      const [ax, az] = w.pts[j], [bx, bz] = w.pts[j + 1], L2 = (bx - ax) ** 2 + (bz - az) ** 2 || 1;
+      pts.push([ax, az, true]);
+      for (const [x, z] of cuts[i][j].map(c => [c[0], c[1], ((c[0] - ax) * (bx - ax) + (c[1] - az) * (bz - az)) / L2]).sort((p, q) => p[2] - q[2])) pts.push([x, z, true]);
+    }
+    const last = w.pts[w.pts.length - 1];
+    pts.push([last[0], last[1], true]);
+    let prev = -1;
+    for (let k = 0; k < pts.length; k++) {
+      const [x, z] = pts[k];
+      if (k > 0) {                                                   // points intermédiaires tous les 8 m
+        const [px, pz] = pts[k - 1], L = Math.hypot(x - px, z - pz), n = Math.floor(L / 8);
+        for (let q = 1; q < n; q++) {
+          const ix = px + (x - px) * q / n, iz = pz + (z - pz) * q / n;
+          if (!inside(ix, iz)) { prev = -1; continue; }
+          const id = node(ix, iz, 0.4);
+          if (prev >= 0) link(prev, id);
+          prev = id;
+        }
+      }
+      if (!inside(x, z)) { prev = -1; continue; }
+      const id = node(x, z, 1.5);
+      if (prev >= 0) link(prev, id);
+      prev = id;
+    }
+  });
+  W.graph = { X, Z, adj, grid: nodeGrid, n: X.length };
+}
+function nearestNode(W, x, z, maxR = 200) {
+  const G = W.graph;
+  let best = -1, bd = Infinity;
+  for (let r = 12; r <= maxR && best < 0; r *= 2) {
+    for (let i = Math.floor((x - r) / 6); i <= Math.floor((x + r) / 6); i++) for (let j = Math.floor((z - r) / 6); j <= Math.floor((z + r) / 6); j++) {
+      for (const id of G.grid.at(i * 6 + 3, j * 6 + 3)) {
+        if (!G.adj[id].length) continue;
+        const d = (G.X[id] - x) ** 2 + (G.Z[id] - z) ** 2;
+        if (d < bd) { bd = d; best = id; }
+      }
+    }
+  }
+  return best;
+}
+// plus court chemin (A*), tas binaire
+function findPath(W, from, to) {
+  const G = W.graph, n = G.n, g = new Float64Array(n).fill(Infinity), came = new Int32Array(n).fill(-1), closed = new Uint8Array(n);
+  const heap = [], f = [];
+  const push = (id, pri) => { heap.push(id); f.push(pri); let i = heap.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (f[p] <= f[i]) break; [heap[p], heap[i]] = [heap[i], heap[p]]; [f[p], f[i]] = [f[i], f[p]]; i = p; } };
+  const pop = () => {
+    const top = heap[0], lastId = heap.pop(), lastF = f.pop();
+    if (heap.length) {
+      heap[0] = lastId; f[0] = lastF;
+      let i = 0;
+      for (;;) { const l = i * 2 + 1, r = l + 1; let m = i; if (l < heap.length && f[l] < f[m]) m = l; if (r < heap.length && f[r] < f[m]) m = r; if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; [f[m], f[i]] = [f[i], f[m]]; i = m; }
+    }
+    return top;
+  };
+  const h = id => Math.hypot(G.X[id] - G.X[to], G.Z[id] - G.Z[to]);
+  g[from] = 0; push(from, h(from));
+  while (heap.length) {
+    const cur = pop();
+    if (cur === to) break;
+    if (closed[cur]) continue;
+    closed[cur] = 1;
+    for (const nb of G.adj[cur]) {
+      const ng = g[cur] + Math.hypot(G.X[nb] - G.X[cur], G.Z[nb] - G.Z[cur]);
+      if (ng < g[nb]) { g[nb] = ng; came[nb] = cur; push(nb, ng + h(nb)); }
+    }
+  }
+  if (from !== to && came[to] < 0) return null;
+  const path = [to];
+  while (path[path.length - 1] !== from) path.push(came[path[path.length - 1]]);
+  return path.reverse();
+}
+
 // ---------- Traces de pneus (lumineuses en mode années 80) ----------
 const SKID_MAX = 1200;
 const skids = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.3, 1).rotateX(-Math.PI / 2), undefined, SKID_MAX);
@@ -4955,6 +5119,7 @@ const el = {
   menu: $('menu'), win: $('win'), winTime: $('win-time'), winBest: $('win-best'), winLede: $('win-lede'),
   menuNote: $('menu-note'), mapNote: $('map-note'), route: $('menu-route'), eyebrow: $('menu-eyebrow'), count: $('menu-count'),
   start: $('btn-start'), newGame: $('btn-new'), nitro: $('nitro'),
+  nav: $('nav'), navArrow: $('nav-arrow'), navDist: $('nav-dist'), navStreet: $('nav-street'),
 };
 el.sound.textContent = muted ? 'Son : non' : 'Son : oui';
 const setText = (e, v) => { v = String(v); if (e._v !== v) { e.textContent = v; e._v = v; } };
@@ -5000,7 +5165,8 @@ const ARTICLES = { rue: 'la rue', avenue: "l'avenue", boulevard: 'le boulevard',
   'carré': 'le carré', parc: 'le parc', square: 'le square', terrasse: 'la terrasse', 'montée': 'la montée', 'allée': "l'allée",
   promenade: 'la promenade', passage: 'le passage', quai: 'le quai', autoroute: "l'autoroute", jardin: 'le jardin', esplanade: "l'esplanade",
   impasse: "l'impasse", route: 'la route', sentier: 'le sentier', tunnel: 'le tunnel', ruelle: 'la ruelle' };
-const spoken = n => n.replace(/\bSte-/g, 'Sainte-').replace(/\bSt-/g, 'Saint-').replace(/\s+E$/, ' Est').replace(/\s+O$/, ' Ouest').replace(/-/g, ' ');
+const spoken = n => n.replace(/\bSte-/g, 'Sainte-').replace(/\bSt-/g, 'Saint-').replace(/\s+E$/, ' Est').replace(/\s+O$/, ' Ouest')
+  .replace(/\bEst\b(?=\s*$|\s*[.,;!?]|\s+(?:à|et)\b)/g, 'Èste').replace(/-/g, ' ');   // « Est » se lit [ɛst], pas « et »
 function withArticle(n) {
   const m = /^(\S+)\s+(.+)$/.exec(n);
   const art = m && ARTICLES[m[1].toLowerCase()];
@@ -5050,7 +5216,7 @@ function sayStreet(n) {
     if (Math.abs(d) > 0.8 && Math.abs(d) < 2.6) turn = d > 0 ? -1 : 1;   // le lacet augmente en tournant à gauche
   }
   streetHeading = heading;
-  if (!synth || !voiceOn || muted || !n || state !== 'play') return;
+  if (!synth || !voiceOn || muted || !n || state !== 'play' || nav.active) return;   // le GPS a la parole
   const now = performance.now();
   if (n === lastSpoken && now - lastSpokenT < 10000) return;   // pas de répétition si on revient sur la même rue
   lastSpoken = n; lastSpokenT = now;
@@ -5089,12 +5255,12 @@ const WORLD_INFO = {
   quebec: {
     eyebrow: 'Départ · Rue Saint-Louis',
     route: ['Vieux-Québec', 'Saint-Jean-Baptiste', 'Montcalm', 'Plaines'],
-    note: `Le Vieux-Québec, Saint-Jean-Baptiste et Montcalm dans leurs vraies limites, avec leur relief : maisons de pierre aux toits de tôle et lucarnes, clochers, Côte de la Montagne, remparts et portes, Grande Allée, avenue Cartier et plaines d'Abraham, les statues et monuments, et les enseignes des vrais commerces (rue Saint-Jean, Petit-Champlain…). ${OSM_CREDIT}`,
+    note: `Le Vieux-Québec, Saint-Jean-Baptiste et Montcalm dans leurs vraies limites, avec leur relief : maisons de pierre aux toits de tôle et lucarnes, clochers, Côte de la Montagne, remparts et portes, Grande Allée, avenue Cartier et plaines d'Abraham, les statues et monuments, et les enseignes des vrais commerces (rue Saint-Jean, Petit-Champlain…). Départ fixe : devant le Château Frontenac. ${OSM_CREDIT}`,
   },
   plateau: {
     eyebrow: 'Départ · Rue Saint-Denis',
     route: ['Saint-Denis', 'Saint-Laurent', 'Mile End', 'Parc La Fontaine'],
-    note: `Tout l'arrondissement du Plateau-Mont-Royal, dans ses vraies limites (de la rue Sherbrooke à la voie ferrée du Mile End, de l'avenue du Parc à l'avenue Papineau) : plex en brique, balcons et escaliers extérieurs, ruelles, parc La Fontaine, et les enseignes des vrais commerces (Schwartz's, La Banquise, Fairmount Bagel…). Départ rue Saint-Denis, près du métro Mont-Royal. ${OSM_CREDIT}`,
+    note: `Tout l'arrondissement du Plateau-Mont-Royal, dans ses vraies limites (de la rue Sherbrooke à la voie ferrée du Mile End, de l'avenue du Parc à l'avenue Papineau) : plex en brique, balcons et escaliers extérieurs, ruelles, parc La Fontaine, les statues et monuments, et les enseignes des vrais commerces (Schwartz's, La Banquise, Fairmount Bagel…). Départ fixe : rue Saint-Denis, près du métro Mont-Royal. ${OSM_CREDIT}`,
   },
 };
 for (const [id, rw] of Object.entries(REAL_WORLDS)) {
@@ -5135,6 +5301,8 @@ function refreshMenu() {
   $('style-' + style).checked = true;
   $('mode-' + mode).checked = true;
   $('voice-' + (voiceOn ? 'on' : 'off')).checked = true;
+  $('start-' + startMode).checked = true;
+  if (startMode === 'hasard') el.eyebrow.textContent = 'Départ · au hasard';
   el.best.hidden = el.bestK.hidden = best == null;
   if (best != null) setText(el.best, fmt(best));
 }
@@ -5167,6 +5335,7 @@ function win() {
   setTimeout(() => $('btn-again').focus({ preventScroll: true }), 50);
 }
 function resetRun() {
+  stopNav();
   for (const c of world.coins) { c.taken = false; c.mesh.visible = true; c.beam.visible = true; }
   collected = 0;
   elapsed = 0;
@@ -5200,14 +5369,34 @@ function openMenu() {
   el.menu.hidden = false;
   setTimeout(() => el.start.focus({ preventScroll: true }), 30);
 }
+const spotBlocked = (qx, qz) => world.rampAt(qx, qz) > -Infinity || (world.extraAt && world.extraAt(qx, qz) > -Infinity) ||
+  (world.siteOn && world.site.grid.at(qx, qz).some(it => !it.off && (it.seg ? closestOnSeg(qx, qz, it)[0] : Math.hypot(qx - it.x, qz - it.z)) < it.r + 2.2)) ||
+  (world.parked && world.parked.grid.at(qx, qz).some(i => { const v = world.parked.list[i]; return !v.off && Math.hypot(v.x - qx, v.z - qz) < 3.5; }));
+// départ au hasard : un point d'une vraie rue, dans le territoire, loin des pièces et des chantiers
+function randomSpot() {
+  const ways = world.roadWays.filter(w => w.k <= 1);
+  const total = ways.reduce((sum, w) => sum + w.pts.reduce((a, p, i) => a + (i ? Math.hypot(p[0] - w.pts[i - 1][0], p[1] - w.pts[i - 1][1]) : 0), 0), 0);
+  for (let tries = 0; tries < 80; tries++) {
+    let t = Math.random() * total;
+    for (const w of ways) for (let i = 1; i < w.pts.length; i++) {
+      const [ax, az] = w.pts[i - 1], [bx, bz] = w.pts[i], L = Math.hypot(bx - ax, bz - az);
+      if (t > L) { t -= L; continue; }
+      const x = ax + (bx - ax) * t / L, z = az + (bz - az) * t / L, sg = Math.random() < 0.5 ? 1 : -1;
+      t = Infinity;
+      if (world.inRegion && !world.inRegion(x, z, -25)) break;
+      if (world.coins.some(c => (c.x - x) ** 2 + (c.z - z) ** 2 < 400) || spotBlocked(x, z) || world.waterAt(x, z) > world.ground(x, z) - 0.2) break;
+      return { x, z, yaw: Math.atan2((bx - ax) * sg, (bz - az) * sg) };
+    }
+  }
+  return world.spawn;
+}
+let startMode = store.get('start') === 'fixe' ? 'fixe' : 'hasard';
 function respawn(nearestRoad) {
-  let { x, z, yaw } = world.spawn;
+  let { x, z, yaw } = startMode === 'hasard' && !nearestRoad ? randomSpot() : world.spawn;
   if (nearestRoad) {
     let [px, pz, dx, dz] = world.nearestRoad(car.pos.x, car.pos.z);
     if (dx * Math.sin(car.yaw) + dz * Math.cos(car.yaw) < 0) { dx = -dx; dz = -dz; }
-    const blocked = (qx, qz) => world.rampAt(qx, qz) > -Infinity || (world.extraAt && world.extraAt(qx, qz) > -Infinity) ||
-      (world.siteOn && world.site.grid.at(qx, qz).some(it => (it.seg ? closestOnSeg(qx, qz, it)[0] : Math.hypot(qx - it.x, qz - it.z)) < it.r + 2.2));
-    for (let i = 0; i < 8 && blocked(px, pz); i++) { px += dx * 7; pz += dz * 7; }
+    for (let i = 0; i < 8 && spotBlocked(px, pz); i++) { px += dx * 7; pz += dz * 7; }
     x = px; z = pz; yaw = Math.atan2(dx, dz);
   }
   car.pos.set(x, world.ground(x, z), z);
@@ -5217,6 +5406,28 @@ function respawn(nearestRoad) {
   car.airTime = 0;
   carObj.root.quaternion.setFromAxisAngle(Y_AXIS, yaw);
   skidHas[0] = skidHas[1] = false;
+}
+function teleportTo(dest) {
+  let [px, pz, dx, dz] = world.nearestRoad(dest.x, dest.z);
+  for (let i = 0; i < 6 && spotBlocked(px, pz); i++) { px += dx * 6; pz += dz * 6; }
+  car.pos.set(px, world.ground(px, pz), pz);
+  car.yaw = Math.atan2(dx, dz);
+  car.vx = car.vz = car.vy = car.yawRate = car.steer = car.spin = car.slip = 0;
+  car.grounded = true; car.airTime = 0;
+  carObj.root.quaternion.setFromAxisAngle(Y_AXIS, car.yaw);
+  camPos.set(px - dx * 7.2, car.pos.y + 2.8, pz - dz * 7.2); camYaw = car.yaw;
+  skidHas[0] = skidHas[1] = false;
+}
+function gotoPlace(mode) {
+  const q = $('goto-input').value.trim(), note = $('goto-note');
+  if (!q) { $('goto-input').focus(); return; }
+  if (!REAL_WORLDS[world.id]) { note.textContent = 'Les adresses fonctionnent sur les cartes réelles (Vieux-Québec, Plateau).'; return; }
+  const dest = findPlace(q);
+  if (!dest) { note.textContent = `Introuvable : « ${q} ». Essaie un numéro et une rue (4200 Saint-Denis) ou un lieu (Schwartz's).`; return; }
+  note.textContent = `→ ${dest.label}`;
+  if (!gameActive) resetRun();
+  if (mode === 'tp') { stopNav(); teleportTo(dest); play(); toast(dest.label, 1600); }
+  else { play(); startNav(dest); }
 }
 function cycleCam() {
   camMode = (camMode + 1) % 3;
@@ -5303,6 +5514,7 @@ async function selectWorld(id) {
   setSite(world, mode === 'chantier');
   streetShown = streetCand = '';
   el.sign.hidden = true;
+  fillPlaceList();
   applyStyle();
   resetRun();
   refreshMenu();
@@ -5312,6 +5524,11 @@ async function selectWorld(id) {
 addEventListener('keydown', e => {
   initAudio();
   const k = e.key.toLowerCase();
+  if (e.target && e.target.id === 'goto-input') {                    // on tape une adresse
+    if (e.code === 'Enter') { e.preventDefault(); gotoPlace('nav'); }
+    else if (e.code === 'Escape' && gameActive) play();
+    return;
+  }
   if (state === 'menu') {
     if (e.code === 'Enter' && e.target.tagName !== 'BUTTON') { e.preventDefault(); startOrResume(); }
     else if (e.code === 'Escape' && gameActive) play();
@@ -5330,6 +5547,7 @@ addEventListener('keydown', e => {
   else if (k === 'm') toggleMute();
   else if (k === 'v') setVoice(!voiceOn, true);
   else if (k === 'n' || e.code === 'ShiftLeft' || e.code === 'ShiftRight') fireNitro();
+  else if (k === 't') { e.preventDefault(); openMenu(); setTimeout(() => $('goto-input').focus(), 60); }
 });
 addEventListener('keyup', e => keys.delete(e.code));
 addEventListener('blur', () => keys.clear());
@@ -5347,6 +5565,10 @@ document.querySelectorAll('input[name="map"]').forEach(r => r.addEventListener('
 document.querySelectorAll('input[name="style"]').forEach(r => r.addEventListener('change', () => setStyle(r.value)));
 document.querySelectorAll('input[name="mode"]').forEach(r => r.addEventListener('change', () => setMode(r.value)));
 document.querySelectorAll('input[name="voice"]').forEach(r => r.addEventListener('change', () => setVoice(r.value === 'on')));
+document.querySelectorAll('input[name="start"]').forEach(r => r.addEventListener('change', () => { startMode = r.value; store.set('start', r.value); refreshMenu(); }));
+onButton('goto-nav', () => gotoPlace('nav'));
+onButton('goto-tp', () => gotoPlace('tp'));
+onButton('btn-goto', () => { openMenu(); setTimeout(() => $('goto-input').focus(), 60); });
 
 const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
 document.body.classList.toggle('touch', isTouch);
@@ -5390,6 +5612,17 @@ function drawMinimap() {
     const dx = x - MM / 2, dy = y - MM / 2, d = Math.hypot(dx, dy), lim = MM / 2 - 8;
     if (d > lim) { x = MM / 2 + (dx / d) * lim; y = MM / 2 + (dy / d) * lim; r = 3.2; }
     g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill(); g.stroke();
+  }
+  if (nav.active && nav.pts.length > nav.idx + 1) {                    // itinéraire GPS
+    g.strokeStyle = pal.route; g.lineWidth = 5; g.lineCap = g.lineJoin = 'round';
+    g.beginPath();
+    for (let i = nav.idx; i < nav.pts.length; i++) { const x = MM / 2 - (nav.pts[i][0] - cx) * s, y = MM / 2 - (nav.pts[i][1] - cz) * s; if (i === nav.idx) g.moveTo(x, y); else g.lineTo(x, y); }
+    g.stroke();
+    let x = MM / 2 - (nav.dest.x - cx) * s, y = MM / 2 - (nav.dest.z - cz) * s;
+    const dd = Math.hypot(x - MM / 2, y - MM / 2), lim = MM / 2 - 9;
+    if (dd > lim) { x = MM / 2 + (x - MM / 2) / dd * lim; y = MM / 2 + (y - MM / 2) / dd * lim; }
+    g.fillStyle = pal.route; g.strokeStyle = '#ffffff'; g.lineWidth = 2;
+    g.beginPath(); g.arc(x, y, 6, 0, Math.PI * 2); g.fill(); g.stroke();
   }
   if (world.nitros) {
     g.fillStyle = pal.nitro;
@@ -5583,8 +5816,198 @@ function updateStatueNames(dt) {
     if (Math.hypot(st.x - car.pos.x, st.z - car.pos.z) < 14) { st.seen = true; toast(st.n, 1700); break; }
   }
 }
+// ---------- Adresses et lieux : « 4200 rue Saint-Denis », « 1000 St-Jean », « Schwartz's », « Château Frontenac » ----------
+const normTxt = s => String(s).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[’']/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
+const GENERIC_WORDS = new Set(['rue', 'avenue', 'av', 'ave', 'boulevard', 'boul', 'bd', 'blvd', 'chemin', 'ch', 'place', 'pl', 'cote', 'montee', 'terrasse', 'allee', 'de', 'du', 'des', 'la', 'le', 'l', 'd', 'street']);
+const DIR_WORDS = { e: 'est', est: 'est', o: 'ouest', ouest: 'ouest', w: 'ouest' };
+const tokensOf = s => normTxt(s).split(' ').filter(Boolean).map(t => (t === 'st' ? 'saint' : t === 'ste' ? 'sainte' : DIR_WORDS[t] || t)).filter(t => !GENERIC_WORDS.has(t));
+const lowerFirst = n => (/^(Rue|Avenue|Boulevard|Côte|Chemin|Place|Terrasse|Montée|Allée|Carré|Parc)\s/.test(n) ? n.charAt(0).toLowerCase() + n.slice(1) : n);
+function placeIndex(W) {
+  if (W.places) return W.places;
+  const D = REAL_WORLDS[W.id] && REAL_WORLDS[W.id].data(), P = [];
+  const add = (n, kind, x, z) => { if (n) P.push({ n, kind, x, z, tok: tokensOf(n) }); };
+  const centroidOf = flat => { let x = 0, z = 0; for (let k = 0; k < flat.length; k += 2) { x += flat[k]; z += flat[k + 1]; } return [x / (flat.length / 2), z / (flat.length / 2)]; };
+  if (D) {
+    const streets = new Map();
+    for (const r of D.roads) {
+      if (!r.n || r.k > 1) continue;
+      const m = Math.floor(r.p.length / 4) * 2, L = r.p.length;
+      if (!streets.has(r.n) || L > streets.get(r.n).L) streets.set(r.n, { L, x: r.p[m], z: r.p[m + 1] });
+    }
+    for (const [n, v] of streets) add(n, 'rue', v.x, v.z);
+    for (const l of D.landmarks || []) add(l.n, 'lieu', l.x, l.z);
+    for (const s of D.shops || []) add(s.n, 'commerce', s.x, s.z);
+    for (const st of D.statues || []) add(st.n, 'monument', st.x, st.z);
+    for (const a of D.areas || []) add(a.n, 'parc', ...centroidOf(a.p));
+    for (const b of D.buildings) if (b.n) add(b.n, 'bâtiment', ...centroidOf(b.p));
+    W.addrStreets = D.addr ? Object.keys(D.addr).map(n => ({ n, tok: tokensOf(n) })) : [];
+  }
+  W.places = P;
+  return P;
+}
+function findPlace(q) {
+  const W = world, D = REAL_WORLDS[W.id] && REAL_WORLDS[W.id].data();
+  if (!D) return null;
+  placeIndex(W);
+  const m = /^\s*(\d+)(?:\s?[a-z](?=[\s,-]))?\s*[,-]?\s*(.+)$/i.exec(q);   // « 4200 », « 4200a », « 4200, »
+  if (m && D.addr) {                                                  // numéro + rue
+    const num = +m[1], qt = tokensOf(m[2]);
+    const dirQ = qt.filter(t => t === 'est' || t === 'ouest'), core = qt.filter(t => t !== 'est' && t !== 'ouest');
+    let best = null, bs = -Infinity;
+    for (const s of W.addrStreets) {
+      const core2 = s.tok.filter(t => t !== 'est' && t !== 'ouest');
+      if (!core.length || !core.every(t => core2.some(u => u.startsWith(t)))) continue;
+      if (dirQ.length && !dirQ.every(t => s.tok.includes(t))) continue;
+      const arr = D.addr[s.n];
+      let k = 0, kd = Infinity;
+      for (let i = 0; i < arr.length; i += 3) {                      // même côté de la rue (parité) de préférence
+        const d = Math.abs(arr[i] - num) + (arr[i] % 2 !== num % 2 ? 3 : 0);
+        if (d < kd) { kd = d; k = i; }
+      }
+      const score = core.length * 10 - (core2.length - core.length) * 2 - Math.min(kd, 4000) / 400;
+      if (score > bs) { bs = score; best = { n: s.n, k }; }
+    }
+    if (best) { const arr = D.addr[best.n]; return { x: arr[best.k + 1], z: arr[best.k + 2], label: `${arr[best.k]}, ${lowerFirst(best.n)}` }; }
+  }
+  const qt = tokensOf(q);                                             // un lieu, un commerce, une rue…
+  if (!qt.length) return null;
+  let best = null, bs = -Infinity;
+  for (const p of W.places) {
+    if (!qt.every(t => p.tok.some(u => u.startsWith(t)))) continue;
+    const score = qt.length * 10 - (p.tok.length - qt.length) * 1.5 + ({ lieu: 4, rue: 3, monument: 2, parc: 2 }[p.kind] || 0);
+    if (score > bs) { bs = score; best = p; }
+  }
+  return best ? { x: best.x, z: best.z, label: best.n } : null;
+}
+function fillPlaceList() {
+  const dl = $('goto-list');
+  dl.innerHTML = '';
+  if (!REAL_WORLDS[world.id]) return;
+  const names = new Set();
+  for (const p of placeIndex(world)) if (p.kind !== 'bâtiment' || names.size < 3000) names.add(p.n);
+  const frag = document.createDocumentFragment();
+  for (const n of [...names].sort((a, b) => a.localeCompare(b, 'fr'))) { const o = document.createElement('option'); o.value = n; frag.appendChild(o); }
+  dl.appendChild(frag);
+}
+
+// ---------- Navigation GPS : tracé, flèches sur la chaussée, consignes vocales, recalcul ----------
+const nav = { active: false, dest: null, pts: [], cum: [], idx: 0, turns: [], off: 0, timer: 0, onArrive: null };
+const NAV_MAX = 40;
+const navArrowGeo = (() => {
+  const s = new THREE.Shape();
+  s.moveTo(0, 0.9); s.lineTo(0.75, 0.05); s.lineTo(0.42, 0.05); s.lineTo(0.42, -0.8); s.lineTo(-0.42, -0.8); s.lineTo(-0.42, 0.05); s.lineTo(-0.75, 0.05); s.closePath();
+  return new THREE.ShapeGeometry(s).rotateX(-Math.PI / 2);
+})();
+const navArrowMat = { normal: basic(hdr(0.2, 0.9, 1.9), { transparent: true, opacity: 0.85, depthWrite: false, ...offset(-8) }), retro: basic(hdr(0.3, 2.2, 1.8), { transparent: true, opacity: 0.9, depthWrite: false, ...offset(-8) }) };
+const navArrows = new THREE.InstancedMesh(navArrowGeo, undefined, NAV_MAX);
+reg(navArrows, navArrowMat.normal, navArrowMat.retro);
+navArrows.count = 0; navArrows.frustumCulled = false; navArrows.renderOrder = 2;
+scene.add(navArrows);
+const navBeam = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.2, 60, 16, 1, true).translate(0, 30, 0), basic(hdr(0.3, 1.9, 0.6), { transparent: true, opacity: 0.28, depthWrite: false, side: THREE.DoubleSide }));
+navBeam.visible = false;
+scene.add(navBeam);
+function stopNav() {
+  nav.active = false; nav.onArrive = null;
+  navArrows.count = 0; navBeam.visible = false;
+  el.nav.hidden = true;
+}
+function startNav(dest, opts = {}) {
+  if (!world.graph) buildRoadGraph(world);
+  const a = nearestNode(world, car.pos.x, car.pos.z), b = nearestNode(world, dest.x, dest.z, 400);
+  const path = a >= 0 && b >= 0 ? findPath(world, a, b) : null;
+  if (!path) { if (!opts.quiet) toast('Aucun itinéraire trouvé', 1400); return false; }
+  const G = world.graph;
+  nav.pts = path.map(id => [G.X[id], G.Z[id]]);
+  nav.pts.push([dest.x, dest.z]);
+  nav.cum = [0];
+  for (let i = 1; i < nav.pts.length; i++) nav.cum.push(nav.cum[i - 1] + Math.hypot(nav.pts[i][0] - nav.pts[i - 1][0], nav.pts[i][1] - nav.pts[i - 1][1]));
+  // virages : changement de cap de plus de 35° sur ~16 m
+  nav.turns = [];
+  for (let k = 2; k < nav.pts.length - 2; k++) {
+    const p0 = nav.pts[k - 2], p1 = nav.pts[k], p2 = nav.pts[k + 2];
+    const ax = p1[0] - p0[0], az = p1[1] - p0[1], bx = p2[0] - p1[0], bz = p2[1] - p1[1];
+    const la = Math.hypot(ax, az), lb = Math.hypot(bx, bz);
+    if (la < 1 || lb < 1) continue;
+    const sin = (bx * az - bz * ax) / (la * lb), cos = (ax * bx + az * bz) / (la * lb), ang = Math.atan2(sin, cos);
+    if (Math.abs(ang) < 0.6) continue;
+    const last = nav.turns[nav.turns.length - 1];
+    if (last && nav.cum[k] - nav.cum[last.k] < 20) { if (Math.abs(ang) > Math.abs(last.ang)) Object.assign(last, { k, ang }); continue; }
+    nav.turns.push({ k, ang, said: 0 });
+  }
+  for (const t of nav.turns) {                                        // nom de la rue après le virage
+    const q = nav.pts[Math.min(nav.pts.length - 1, t.k + 3)], r = nav.pts[Math.min(nav.pts.length - 1, t.k + 4)];
+    t.name = world.streetAt(q[0], q[1], r[0] - q[0], r[1] - q[1], '') || '';
+    t.dir = t.ang > 0 ? 'gauche' : 'droite';
+  }
+  nav.active = true; nav.dest = dest; nav.idx = 0; nav.off = 0; nav.timer = 0;
+  nav.onArrive = opts.onArrive || null;
+  navBeam.position.set(dest.x, world.ground(dest.x, dest.z), dest.z);
+  navBeam.visible = true;
+  el.nav.hidden = false;
+  if (!opts.quiet) {
+    const km = nav.cum[nav.cum.length - 1];
+    speakNav(opts.intro || `Itinéraire vers ${dest.label}. ${km > 1000 ? (km / 1000).toFixed(1).replace('.', ',') + ' kilomètre' + (km >= 2000 ? 's' : '') : Math.round(km / 10) * 10 + ' mètres'}.`);
+  }
+  return true;
+}
+function speakNav(text) { if (voiceOn && !muted) speak(text); }
+const TURN_ARROW = { gauche: '↰', droite: '↱' };
+function updateNav(dt) {
+  if (!nav.active || state === 'menu') return;
+  nav.timer -= dt;
+  if (nav.timer > 0) return;
+  nav.timer = 0.12;
+  const P = nav.pts;
+  let bi = nav.idx, bd = Infinity;                                    // où en est-on sur le tracé
+  for (let i = nav.idx; i < Math.min(P.length, nav.idx + 30); i++) {
+    const d = (P[i][0] - car.pos.x) ** 2 + (P[i][1] - car.pos.z) ** 2;
+    if (d < bd) { bd = d; bi = i; }
+  }
+  nav.idx = bi;
+  const dDest = Math.hypot(nav.dest.x - car.pos.x, nav.dest.z - car.pos.z);
+  if (dDest < 16) {
+    const cb = nav.onArrive;
+    stopNav();
+    if (cb) cb(); else { speakNav('Vous êtes arrivé à destination.'); toast(`Arrivé : ${nav.dest.label}`, 1800); }
+    return;
+  }
+  if (Math.sqrt(bd) > 28) nav.off += 0.12; else nav.off = 0;           // hors du tracé : on recalcule
+  if (nav.off > 1.4) {
+    const cb = nav.onArrive;
+    if (startNav(nav.dest, { quiet: true, onArrive: cb })) speakNav('Recalcul de l’itinéraire.');
+    return;
+  }
+  // prochain virage, consignes
+  const here = nav.cum[bi];
+  const next = nav.turns.find(t => t.k > bi + 1);
+  const remain = nav.cum[P.length - 1] - here;
+  if (next) {
+    const d = nav.cum[next.k] - here, on = next.name ? ` sur ${withArticle(next.name)}` : '';
+    if (next.said < 1 && d < 190 && d > 70) { next.said = 1; speakNav(`Dans ${Math.max(50, Math.round(d / 50) * 50)} mètres, tournez à ${next.dir}${on}.`); }
+    else if (next.said < 2 && d <= 45) { next.said = 2; speakNav(`Tournez à ${next.dir}${on}.`); }
+    setText(el.navArrow, TURN_ARROW[next.dir]);
+    setText(el.navDist, d > 950 ? `${(d / 1000).toFixed(1).replace('.', ',')} km` : `${Math.round(d / 10) * 10} m`);
+    setText(el.navStreet, next.name || 'Continuez');
+  } else {
+    setText(el.navArrow, '⚑');
+    setText(el.navDist, `${Math.round(remain / 10) * 10} m`);
+    setText(el.navStreet, nav.dest.label);
+  }
+  // flèches lumineuses sur la chaussée, sur les ~200 m qui viennent
+  let n = 0;
+  for (let i = bi + 1; i < P.length - 1 && n < NAV_MAX && nav.cum[i] - here < 220; i += 1) {
+    if (i % 2) continue;
+    const [x, z] = P[i], [x2, z2] = P[i + 1];
+    _pq4.setFromAxisAngle(Y_AXIS, Math.atan2(x2 - x, z2 - z) + Math.PI);
+    navArrows.setMatrixAt(n++, _pm4.compose(_pp4.set(x, world.ground(x, z) + 0.36, z), _pq4, _ps4.setScalar(1.3)));
+  }
+  navArrows.count = n;
+  navArrows.instanceMatrix.needsUpdate = true;
+}
+
 function updateHUD(dt) {
   updateStatueNames(dt);
+  updateNav(dt);
   const kmh = Math.round(Math.hypot(car.vx, car.vz) * 3.6);
   setText(el.speed, kmh);
   setText(el.speed2, `${kmh} km/h`);
