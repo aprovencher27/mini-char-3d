@@ -398,13 +398,14 @@
 
 <div id="help" class="hud">
   <kbd>Z</kbd><kbd>Q</kbd><kbd>S</kbd><kbd>D</kbd> ou flèches <span class="sep">·</span>
-  <kbd>Espace</kbd> drift <span class="sep">·</span> <kbd>N</kbd> nitro <span class="sep">·</span> <kbd>G</kbd> années 80 <span class="sep">·</span> <kbd>R</kbd> replacer
+  <kbd>Espace</kbd> drift <span class="sep">·</span> <kbd>N</kbd> nitro <span class="sep">·</span> <kbd>H</kbd> klaxon <span class="sep">·</span> <kbd>G</kbd> années 80 <span class="sep">·</span> <kbd>R</kbd> replacer
 </div>
 
 <div id="toast" class="hud" role="status" aria-live="polite"></div>
 
 <div id="touch" aria-hidden="true">
   <div class="tgroup">
+    <button class="tbtn small" id="btn-horn" type="button">Klax</button>
     <button class="tbtn" data-k="left" type="button">◀</button>
     <button class="tbtn" data-k="right" type="button">▶</button>
   </div>
@@ -422,7 +423,7 @@
   <section class="sign-panel" aria-labelledby="menu-title">
     <p class="eyebrow" id="menu-eyebrow">Départ · Centre-ville</p>
     <h1 id="menu-title">Mini Char 3D</h1>
-    <p class="lede">Prends le volant d'une petite voiture et ramasse les <strong id="menu-count">32 pièces d'or</strong> le plus vite possible. Les bonbonnes bleues donnent du nitro.</p>
+    <p class="lede">Prends le volant d'une petite voiture et ramasse les <strong id="menu-count">32 pièces d'or</strong> le plus vite possible. Les bonbonnes bleues donnent du nitro, et les touristes qui font signe veulent un taxi : arrête-toi à côté d'eux.</p>
     <div class="options">
       <fieldset class="opt wide">
         <legend>Carte</legend>
@@ -490,8 +491,9 @@
       <dt><kbd>Échap</kbd></dt><dd>Menu</dd>
       <dt><kbd>N</kbd><kbd>Maj</kbd></dt><dd>Nitro</dd>
       <dt><kbd>T</kbd></dt><dd>Aller à une adresse</dd>
+      <dt><kbd>H</kbd></dt><dd>Klaxon</dd>
     </dl>
-    <p class="touch-help">◀ ▶ pour tourner, ▲ pour accélérer, ▼ pour freiner et reculer, <strong>Drift</strong> pour le frein à main, <strong>N₂O</strong> pour le nitro. La carte en haut à droite montre les pièces restantes.</p>
+    <p class="touch-help">◀ ▶ pour tourner, ▲ pour accélérer, ▼ pour freiner et reculer, <strong>Drift</strong> pour le frein à main, <strong>N₂O</strong> pour le nitro, <strong>Klax</strong> pour klaxonner. La carte en haut à droite montre les pièces restantes.</p>
     <details class="garage" id="garage">
       <summary><span>Garage</span><span class="garage-cash" id="garage-cash">0 $</span></summary>
       <p class="fine">Ramasse les billets de 20 $ et les pièces, fais des sauts et des courses de taxi pour t'acheter d'autres chars. Attention aux photo-radars : 50 km/h.</p>
@@ -2729,6 +2731,7 @@ function buildInventedWorld() {
   addNitros(W, 12);
   addBills(W, 18);
   addRadars(W, 2);
+  buildPedestrians(W);
 
   // arbres et rochers
   const trees = [];
@@ -3170,6 +3173,7 @@ function buildRealWorld(id, D, cityStyle) {
   addNitros(W, id === 'plateau' ? 30 : 16);
   addBills(W, id === 'plateau' ? 45 : 32);
   addRadars(W, id === 'plateau' ? 6 : 4);
+  buildPedestrians(W);
 
   // mini-carte (suit la voiture)
   const ext = { minX: M.x0, maxX: M.x0 + M.nx * M.cell, minZ: M.z0, maxZ: M.z0 + M.nz * M.cell };
@@ -5542,6 +5546,294 @@ function renderGarage() {
   }
 }
 
+// =====================================================================
+// Piétons et touristes sur les trottoirs des coins touristiques ; klaxon ; clients de taxi
+// Les piétons marchent (bras et jambes qui balancent), s'arrêtent devant les vitrines ;
+// les touristes ont sac à dos, chapeau et appareil photo, et photographient les lieux célèbres.
+// Une voiture fonce sur eux : ils sautent de côté. Touchés quand même : ils tombent et se relèvent.
+// =====================================================================
+const PED_GEO = (() => {
+  const W1 = WHITE;
+  return {
+    body: mergeParts([
+      { geo: new THREE.CylinderGeometry(0.2, 0.16, 0.6, 10).scale(1.2, 1, 0.75).translate(0, 1.2, 0), color: W1 },
+      { geo: new THREE.CylinderGeometry(0.16, 0.17, 0.2, 10).scale(1.15, 1, 0.8).translate(0, 0.86, 0), color: gray(0.35) },
+    ]),
+    head: mergeParts([
+      { geo: new THREE.SphereGeometry(0.115, 12, 10).translate(0, 1.64, 0.01), color: W1 },
+      { geo: new THREE.SphereGeometry(0.12, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.55).translate(0, 1.66, -0.01), color: gray(0.25) },
+      { geo: new THREE.CylinderGeometry(0.05, 0.06, 0.1, 8).translate(0, 1.5, 0), color: W1 },
+    ]),
+    leg: mergeParts([
+      { geo: new THREE.CylinderGeometry(0.075, 0.06, 0.84, 8).translate(0, -0.42, 0), color: W1 },
+      { geo: new THREE.BoxGeometry(0.11, 0.07, 0.25).translate(0, -0.86, 0.05), color: gray(0.2) },
+    ]),
+    arm: mergeParts([
+      { geo: new THREE.CylinderGeometry(0.055, 0.045, 0.58, 8).translate(0, -0.29, 0), color: W1 },
+      { geo: new THREE.SphereGeometry(0.05, 6, 5).translate(0, -0.6, 0), color: col3(0xd9a47c) },
+    ]),
+    pack: mergeParts([{ geo: new THREE.BoxGeometry(0.32, 0.4, 0.17).translate(0, 1.18, -0.2), color: W1 }]),
+    hat: mergeParts([
+      { geo: new THREE.CylinderGeometry(0.21, 0.21, 0.02, 14).translate(0, 1.745, 0), color: W1 },
+      { geo: new THREE.CylinderGeometry(0.11, 0.12, 0.1, 12).translate(0, 1.8, 0), color: W1 },
+    ]),
+    camera: mergeParts([{ geo: new THREE.BoxGeometry(0.13, 0.08, 0.07), color: gray(0.12) }, { geo: new THREE.CylinderGeometry(0.03, 0.03, 0.05, 8).rotateX(Math.PI / 2).translate(0, 0, 0.05), color: gray(0.3) }]),
+  };
+})();
+const PED_MAT = { normal: new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.75 }), retro: basic(hdr(1.8, 1.2, 0.5), { vertexColors: true }) };
+const SHIRTS = [0xe63946, 0x3a86ff, 0x2a9d8f, 0xf4a300, 0xf2f2f0, 0x1d1f22, 0x8338ec, 0x6a8f3a, 0xd8642a, 0x5b6168, 0xef476f, 0x118ab2].map(col3);
+const PANTS = [0x1f2a44, 0x2b2b2b, 0x3d4a5c, 0x6b5a3a, 0xc9b99a, 0x1c1d20, 0x4a6fa5].map(col3);
+const SKINS = [0xf1c8a8, 0xe0ac86, 0xc68c64, 0x9a6444, 0x6e4630, 0xf6d7bd].map(col3);
+const TOURIST_HATS = [0xf2e6c8, 0xe8c547, 0x1f5fd6, 0xd62f2f, 0xf2f2f0].map(col3);
+const taxiSignTex = makeTexture(128, (g, W, H) => {
+  g.clearRect(0, 0, W, H);
+  g.fillStyle = '#f4d23a'; g.beginPath(); g.roundRect ? g.roundRect(4, 8, W - 8, H - 16, 14) : g.rect(4, 8, W - 8, H - 16); g.fill();
+  g.strokeStyle = '#1d1f22'; g.lineWidth = 5; g.stroke();
+  g.fillStyle = '#1d1f22'; g.font = '700 30px "Barlow Semi Condensed", Arial, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('TAXI !', W / 2, H / 2 + 1);
+}, 64);
+function buildPedestrians(W) {
+  seed = 555 + W.id.length * 91;
+  const D = REAL_WORLDS[W.id] && REAL_WORLDS[W.id].data();
+  const shopGrid = new Grid(40);
+  if (D) for (const s of D.shops || []) shopGrid.add(s, s.x, s.z, s.x, s.z);
+  const lms = D ? D.landmarks || [] : [];
+  // coins touristiques : rues commerçantes, rues piétonnes, abords des lieux célèbres (monde inventé : le centre)
+  const scored = [];
+  for (const way of W.roadWays) {
+    if (way.k === 3 || way.pts.length < 2) continue;
+    // densité touristique : commerces distincts à moins de 35 m, lieux célèbres à moins de 110 m, par 100 m de rue
+    const shops = new Set(), marks = new Set();
+    let L = 0, out = 0;
+    const pts = densify(way.pts, 15);
+    for (let i = 0; i < pts.length; i++) {
+      const [x, z] = pts[i];
+      if (i) L += Math.hypot(x - pts[i - 1][0], z - pts[i - 1][1]);
+      if (W.inRegion && !W.inRegion(x, z, -5)) { out++; continue; }
+      if (D) {
+        for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) for (const sh of shopGrid.at(x + di * 40, z + dj * 40)) if ((sh.x - x) ** 2 + (sh.z - z) ** 2 < 35 * 35) shops.add(sh);
+        lms.forEach((l, k) => { if ((l.x - x) ** 2 + (l.z - z) ** 2 < 110 * 110) marks.add(k); });
+      } else if (Math.hypot(x, z) < 140) shops.add(i);
+    }
+    if (L < 40 || out > pts.length / 2) continue;
+    const score = (shops.size + marks.size * 3) / (L / 100) + (way.k === 2 ? 4 : 0);
+    if (score >= 2) scored.push({ way, score, L });
+  }
+  scored.sort((a, b) => b.score - a.score);
+  const routes = [];
+  for (const { way, score } of scored.slice(0, { plateau: 36, quebec: 36 }[W.id] ?? 24)) {
+    const sides = way.k === 2 ? [0] : [1, -1];
+    for (const sd of sides) {
+      const off = way.k === 2 ? 0 : way.w / 2 + 1.5;
+      const pts = way.pts.map((p, i) => {
+        const a = way.pts[Math.max(0, i - 1)], b = way.pts[Math.min(way.pts.length - 1, i + 1)], L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+        return [p[0] + ((b[1] - a[1]) / L) * off * sd, p[1] - ((b[0] - a[0]) / L) * off * sd];
+      });
+      const cum = [0];
+      for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+      routes.push({ pts, cum, len: cum[cum.length - 1], wide: way.k === 2 ? way.w / 2 - 1 : 0.6, weight: score * cum[cum.length - 1] });
+    }
+  }
+  if (!routes.length) return;
+  const N = { plateau: 300, quebec: 380, invente: 80 }[W.id] ?? 90, list = [];
+  for (let i = 0; i < N; i++) {
+    const R = pickW(routes.map(r => [r, r.weight]), rand()), tourist = rand() < 0.38;   // plus de monde dans les rues les plus touristiques
+    list.push({
+      R, s: rand() * R.len, dir: rand() < 0.5 ? 1 : -1, speed: rrange(1.0, 1.55), lat: rrange(-R.wide, R.wide), tourist,
+      x: 0, z: 0, y: 0, yaw: 0, phase: rand() * 6.28, pause: 0, photo: 0, dodge: null, down: 0, fall: 0, jump: 0, hail: false, gone: false, i,
+    });
+  }
+  // touristes qui photographient les lieux célèbres
+  for (const l of lms.slice(0, 20)) for (let k = 0; k < 3 && list.length < N + 40; k++) {
+    const a = rand() * 6.28, r = rrange(9, 16), x = l.x + Math.cos(a) * r, z = l.z + Math.sin(a) * r;
+    if (W.inRegion && !W.inRegion(x, z)) continue;
+    list.push({ R: null, s: 0, dir: 1, speed: 0, lat: 0, tourist: true, x, z, y: W.ground(x, z), yaw: Math.atan2(l.x - x, l.z - z), phase: rand() * 6.28,
+      pause: 0, photo: 1e9, dodge: null, down: 0, fall: 0, jump: 0, hail: false, gone: false, fixed: true, i: list.length });
+  }
+  for (const q of list) if (q.R) { [q.x, q.z, q.yaw] = pedPose(q.R, q); q.y = W.ground(q.x, q.z); }
+  const n = list.length, nt = list.filter(p => p.tourist).length;
+  const mk = (geo, count) => { const m = new THREE.InstancedMesh(geo, undefined, Math.max(1, count)); reg(m, PED_MAT.normal, PED_MAT.retro); m.castShadow = true; m.frustumCulled = false; W.group.add(m); return m; };
+  const M = { body: mk(PED_GEO.body, n), head: mk(PED_GEO.head, n), leg: mk(PED_GEO.leg, n * 2), arm: mk(PED_GEO.arm, n * 2), pack: mk(PED_GEO.pack, nt), hat: mk(PED_GEO.hat, nt), cam: mk(PED_GEO.camera, nt) };
+  let ti = 0;
+  list.forEach((p, i) => {
+    const shirt = p.tourist ? pick(SHIRTS.slice(0, 9), rand()) : pick(SHIRTS, rand()), pants = pick(PANTS, rand());
+    M.body.setColorAt(i, shirt); M.head.setColorAt(i, pick(SKINS, rand()));
+    M.leg.setColorAt(i * 2, pants); M.leg.setColorAt(i * 2 + 1, pants);
+    M.arm.setColorAt(i * 2, shirt); M.arm.setColorAt(i * 2 + 1, shirt);
+    if (p.tourist) { p.ti = ti; M.pack.setColorAt(ti, pick(SHIRTS, rand())); M.hat.setColorAt(ti, pick(TOURIST_HATS, rand())); M.cam.setColorAt(ti, WHITE); ti++; }
+  });
+  // enseignes « TAXI ! » au-dessus des clients qui font signe
+  const signMat = new THREE.SpriteMaterial({ map: taxiSignTex, depthTest: true, transparent: true });
+  const signs = [0, 1, 2].map(() => { const sp = new THREE.Sprite(signMat); sp.scale.set(1.6, 0.8, 1); sp.visible = false; W.group.add(sp); return sp; });
+  W.peds = { list, M, routes, signs, hail: [], fare: null, hintShown: false };
+}
+const _pdm = new THREE.Matrix4(), _pdm2 = new THREE.Matrix4(), _pdm3 = new THREE.Matrix4(), _pdq = new THREE.Quaternion(), _pdp = new THREE.Vector3(), _pde = new THREE.Euler();
+function pedPose(R, p) {
+  let k = 0;
+  while (k < R.cum.length - 2 && R.cum[k + 1] < p.s) k++;
+  const [ax, az] = R.pts[k], [bx, bz] = R.pts[k + 1], L = (R.cum[k + 1] - R.cum[k]) || 1, f = clamp((p.s - R.cum[k]) / L, 0, 1);
+  const tx = ((bx - ax) / L) * p.dir, tz = ((bz - az) / L) * p.dir;
+  return [ax + (bx - ax) * f - tz * p.lat, az + (bz - az) * f + tx * p.lat, Math.atan2(tx, tz)];
+}
+let pedHitCd = 0, heyCd = 0;
+function updatePeds(dt, t) {
+  const PS = world.peds;
+  if (!PS) return;
+  const M = PS.M, G = world.ground, sp = Math.hypot(car.vx, car.vz);
+  const cfx = sp > 0.5 ? car.vx / sp : Math.sin(car.yaw), cfz = sp > 0.5 ? car.vz / sp : Math.cos(car.yaw);
+  pedHitCd -= dt; heyCd -= dt;
+  updateTaxi(dt, t);
+  for (const p of PS.list) {
+    const i = p.i;
+    if (p.gone) continue;
+    const far = Math.abs(p.x - car.pos.x) + Math.abs(p.z - car.pos.z) > 320;
+    if (far && !p.hail && p.R) { if ((i + Math.floor(t * 4)) % 8) continue; }  // loin : on anime moins souvent
+    let walking = false;
+    // voiture qui fonce dessus : on saute de côté
+    const ex = p.x - car.pos.x, ez = p.z - car.pos.z, ahead = ex * cfx + ez * cfz, lat = ex * cfz - ez * cfx;
+    if (!p.dodge && !p.down && sp > 3 && ahead > 0 && ahead < 5 + sp * 0.45 && Math.abs(lat) < 2.4 && state === 'play') {
+      const sg = lat >= 0 ? 1 : -1;
+      p.dodge = { vx: cfz * sg * 4.2, vz: -cfx * sg * 4.2, t: 0.55 };
+      p.jump = 0.45;
+      if (heyCd <= 0) { heyCd = 0.6; blip(680, 420, 0.18, 'sawtooth', 0.05); }
+    }
+    if (p.down > 0) {                                                  // renversé : couché, puis il se relève
+      p.down -= dt;
+      p.fall = Math.min(1, p.fall + dt * 5);
+      if (p.down <= 0) { p.fall = 0; p.pause = 1; }
+    } else if (p.dodge) {
+      p.x += p.dodge.vx * dt; p.z += p.dodge.vz * dt;
+      p.dodge.t -= dt;
+      if (p.dodge.t <= 0) { p.dodge = null; p.pause = 1.2; if (p.R) { p.lat = clamp(p.lat, -p.R.wide - 2, p.R.wide + 2); } }
+    } else if (p.hail) {
+      // client qui fait signe au bord du trottoir
+    } else if (p.R) {
+      if (p.pause > 0) p.pause -= dt;
+      else if (p.photo > 0) p.photo -= dt;
+      else {
+        p.s += p.dir * p.speed * dt;
+        if (p.s >= p.R.len || p.s <= 0) { p.s = clamp(p.s, 0, p.R.len); p.dir = -p.dir; }
+        if (rand() < dt * 0.02) p.pause = rrange(1.5, 4);                // s'arrête devant une vitrine
+        if (p.tourist && rand() < dt * 0.015) p.photo = rrange(2.5, 5);   // une photo !
+        walking = true;
+        const [x, z, yaw] = pedPose(p.R, p);
+        const k = 1 - Math.exp(-4 * dt);
+        p.x += (x - p.x) * Math.min(1, k * 2); p.z += (z - p.z) * Math.min(1, k * 2);
+        p.yaw = lerpAngle(p.yaw, yaw, 1 - Math.exp(-6 * dt));
+      }
+    }
+    // contact malgré tout
+    if (!p.down && sp > 2 && Math.abs(ex) < 1.6 && Math.abs(ez) < 1.6 && Math.hypot(ex, ez) < 1.25 && state === 'play') {
+      p.down = 2.4; p.fall = 0; p.dodge = null; p.hail = false;
+      car.vx *= 0.9; car.vz *= 0.9;
+      if (pedHitCd <= 0) { pedHitCd = 1.5; addCash(-Math.min(cash, 20)); toast('Attention aux piétons ! −20 $', 1500); blip(300, 120, 0.25, 'triangle', 0.2); }
+    }
+    p.jump = Math.max(0, p.jump - dt);
+    p.y = G(p.x, p.z) + (p.jump > 0 ? Math.sin((p.jump / 0.45) * Math.PI) * 0.45 : 0);
+    // matrices
+    const swing = walking ? Math.sin(t * p.speed * 5.2 + p.phase) * 0.6 : 0;
+    _pde.set(-p.fall * Math.PI / 2, p.yaw, 0, 'YXZ');
+    _pdq.setFromEuler(_pde);
+    _pdm.compose(_pdp.set(p.x, p.y + p.fall * 0.18, p.z), _pdq, ONE);
+    M.body.setMatrixAt(i, _pdm); M.head.setMatrixAt(i, _pdm);
+    for (let s = 0; s < 2; s++) {
+      const sg = s ? -1 : 1;
+      _pdm2.makeRotationX(swing * sg).setPosition(sg * 0.1, 0.92, 0);
+      M.leg.setMatrixAt(i * 2 + s, _pdm3.multiplyMatrices(_pdm, _pdm2));
+      let ax = -swing * sg * 0.8, az = sg * 0.08;
+      if (p.photo > 0 && p.tourist) { ax = -1.35; az = sg * 0.35; }                     // appareil devant les yeux
+      if (p.hail) { if (s === 0) { ax = -2.7 + Math.sin(t * 9) * 0.25; az = 0.2; } }        // la main levée : « Taxi ! »
+      if (p.dodge || p.jump > 0) { ax = -2.4; az = sg * 0.5; }
+      _pdm2.makeRotationFromEuler(_pde.set(ax, 0, az)).setPosition(sg * 0.25, 1.46, 0);
+      M.arm.setMatrixAt(i * 2 + s, _pdm3.multiplyMatrices(_pdm, _pdm2));
+    }
+    if (p.tourist) {
+      M.pack.setMatrixAt(p.ti, _pdm); M.hat.setMatrixAt(p.ti, _pdm);
+      _pdm2.makeTranslation(0, p.photo > 0 ? 1.6 : 1.28, p.photo > 0 ? 0.24 : 0.2);
+      M.cam.setMatrixAt(p.ti, _pdm3.multiplyMatrices(_pdm, _pdm2));
+    }
+  }
+  for (const m of Object.values(M)) m.instanceMatrix.needsUpdate = true;
+}
+// klaxon : les piétons sursautent, les cyclistes sonnent
+function honk() {
+  if (state !== 'play') return;
+  horn(0.14);
+  const PS = world.peds;
+  if (PS) for (const p of PS.list) if (!p.gone && !p.down && Math.hypot(p.x - car.pos.x, p.z - car.pos.z) < 25) { p.jump = 0.45; p.pause = Math.max(p.pause, 0.8); }
+  if (world.siteOn && world.site.cyclists.some(c => !c.fly && Math.hypot(c.x - car.pos.x, c.z - car.pos.z) < 25)) setTimeout(bell, 350);
+}
+function pedHide(p) {
+  const M = world.peds.M;
+  p.gone = true;
+  M.body.setMatrixAt(p.i, ZERO_M); M.head.setMatrixAt(p.i, ZERO_M);
+  for (let s = 0; s < 2; s++) { M.leg.setMatrixAt(p.i * 2 + s, ZERO_M); M.arm.setMatrixAt(p.i * 2 + s, ZERO_M); }
+  if (p.tourist) { M.pack.setMatrixAt(p.ti, ZERO_M); M.hat.setMatrixAt(p.ti, ZERO_M); M.cam.setMatrixAt(p.ti, ZERO_M); }
+}
+
+// ---------- Taxi : des touristes font signe ; arrête-toi près d'eux, le GPS t'amène à leur destination ----------
+function updateTaxi(dt, t) {
+  const PS = world.peds;
+  if (!PS || state !== 'play') { if (PS) for (const s of PS.signs) s.visible = false; return; }
+  // garder trois clients qui font signe (loin de toi, sur un trottoir)
+  PS.hail = PS.hail.filter(p => p.hail);
+  let guard = 0;
+  while (PS.hail.length < 3 && guard++ < 20 && !PS.fare) {
+    const p = PS.list[Math.floor(Math.random() * PS.list.length)];
+    if (!p.R || p.gone || p.hail || p.down || p.fixed) continue;
+    const d = Math.hypot(p.x - car.pos.x, p.z - car.pos.z);
+    if (d < 60 || d > 700) continue;
+    p.hail = true; p.pause = 0; p.photo = 0; p.lat = p.R.wide + 0.4;
+    PS.hail.push(p);
+  }
+  PS.hail.forEach((p, k) => {
+    const sgn = PS.signs[k];
+    if (!sgn) return;
+    sgn.visible = true;
+    sgn.position.set(p.x, p.y + 2.6 + Math.sin(t * 3 + k) * 0.08, p.z);
+    p.yaw = Math.atan2(car.pos.x - p.x, car.pos.z - p.z);
+    const d = Math.hypot(p.x - car.pos.x, p.z - car.pos.z);
+    if (!PS.hintShown && d < 45) { PS.hintShown = true; toast('Un client fait signe : arrête-toi à côté !', 2200); }
+    if (d < 9.5 && Math.hypot(car.vx, car.vz) < 2.5 && !PS.fare) startFare(p);
+  });
+  for (let k = PS.hail.length; k < PS.signs.length; k++) PS.signs[k].visible = false;
+}
+function startFare(p) {
+  const PS = world.peds;
+  p.hail = false;
+  pedHide(p);
+  PS.hail = PS.hail.filter(q => q !== p);
+  // destination : un lieu connu à 400–1600 m (monde inventé : un point de la ville)
+  let dest = null;
+  const places = REAL_WORLDS[world.id] ? placeIndex(world).filter(q => q.kind === 'lieu' || q.kind === 'commerce' || q.kind === 'monument') : [];
+  for (let k = 0; k < 60 && !dest; k++) {
+    let q;
+    if (places.length) q = places[Math.floor(Math.random() * places.length)];
+    else { const s = randomSpot(); q = { x: s.x, z: s.z, n: 'la destination' }; }
+    const d = Math.hypot(q.x - car.pos.x, q.z - car.pos.z);
+    if (d > 400 && d < 1600 && (!world.inRegion || world.inRegion(q.x, q.z, -10))) dest = { x: q.x, z: q.z, label: q.n };
+  }
+  if (!dest) { p.gone = false; return; }
+  const d0 = Math.hypot(dest.x - car.pos.x, dest.z - car.pos.z);
+  if (!startNav(dest, { intro: `Bonjour ! ${dest.label}, s'il vous plaît.`, onArrive: () => endFare(true) })) { p.gone = false; return; }
+  PS.fare = { p, dest, t0: elapsed, len: nav.cum[nav.cum.length - 1] || d0 };
+  toast(`Client à bord · ${dest.label}`, 1800);
+  blip(880, 1320, 0.15, 'sine', 0.06);
+}
+function endFare(arrived) {
+  const PS = world.peds, F = PS && PS.fare;
+  if (!F) return;
+  PS.fare = null;
+  F.p.gone = false; F.p.x = F.dest.x; F.p.z = F.dest.z; F.p.down = 0; F.p.fall = 0;   // le client descend à destination
+  if (!arrived) return;
+  const secs = Math.max(1, elapsed - F.t0), expect = F.len / 8.5;
+  const base = 12 + F.len * 0.02, tip = Math.max(0, Math.min(0.6, (expect - secs) / expect)) * base;
+  const mult = carDef().fare || 1, total = Math.round((base + tip) * mult);
+  addCash(total);
+  speakNav('Merci pour la course !');
+  toast(`Course terminée ! +${total} $${tip > 1 ? ` (pourboire ${Math.round(tip * mult)} $)` : ''}${mult > 1 ? ' · tarif taxi ×2' : ''}`, 2600);
+  blip(990, 1980, 0.12, 'square', 0.07); blip(1318, 2637, 0.2, 'square', 0.07, 0.08);
+}
+
 // ---------- Voix : lit le nom de la rue quand on en change (voix québécoise si l'appareil en a une) ----------
 const synth = window.speechSynthesis || null;
 let voiceOn = store.get('voice') !== 'off';
@@ -5760,6 +6052,7 @@ function win() {
 }
 function resetRun() {
   stopNav();
+  if (world.peds) { if (world.peds.fare) endFare(false); for (const q of world.peds.hail) q.hail = false; world.peds.hail = []; }
   for (const c of world.coins) { c.taken = false; c.mesh.visible = true; c.beam.visible = true; }
   collected = 0;
   elapsed = 0;
@@ -5849,6 +6142,7 @@ function gotoPlace(mode) {
   const dest = findPlace(q);
   if (!dest) { note.textContent = `Introuvable : « ${q} ». Essaie un numéro et une rue (4200 Saint-Denis) ou un lieu (Schwartz's).`; return; }
   note.textContent = `→ ${dest.label}`;
+  if (world.peds && world.peds.fare) { endFare(false); toast('Course annulée', 1000); }
   if (!gameActive) resetRun();
   if (mode === 'tp') { stopNav(); teleportTo(dest); play(); toast(dest.label, 1600); }
   else { play(); startNav(dest); }
@@ -5980,6 +6274,7 @@ addEventListener('keydown', e => {
   else if (k === 'v') setVoice(!voiceOn, true);
   else if (k === 'n' || e.code === 'ShiftLeft' || e.code === 'ShiftRight') fireNitro();
   else if (k === 't') { e.preventDefault(); openMenu(); setTimeout(() => $('goto-input').focus(), 60); }
+  else if (k === 'h') honk();
 });
 addEventListener('keyup', e => keys.delete(e.code));
 addEventListener('blur', () => keys.clear());
@@ -5993,6 +6288,7 @@ onButton('btn-cam', cycleCam);
 onButton('btn-sound', () => { initAudio(); toggleMute(); });
 onButton('btn-menu', openMenu);
 $('btn-nitro').addEventListener('pointerdown', e => { e.preventDefault(); initAudio(); fireNitro(); });
+$('btn-horn').addEventListener('pointerdown', e => { e.preventDefault(); initAudio(); honk(); });
 document.querySelectorAll('input[name="map"]').forEach(r => r.addEventListener('change', () => selectWorld(r.value)));
 document.querySelectorAll('input[name="style"]').forEach(r => r.addEventListener('change', () => setStyle(r.value)));
 document.querySelectorAll('input[name="mode"]').forEach(r => r.addEventListener('change', () => setMode(r.value)));
@@ -6349,6 +6645,7 @@ function startNav(dest, opts = {}) {
   const path = a >= 0 && b >= 0 ? findPath(world, a, b) : null;
   if (!path) { if (!opts.quiet) toast('Aucun itinéraire trouvé', 1400); return false; }
   const G = world.graph;
+  dest = { ...dest, x: G.X[b], z: G.Z[b] };                            // on vise le point de rue le plus proche (devant la porte)
   nav.pts = path.map(id => [G.X[id], G.Z[id]]);
   nav.pts.push([dest.x, dest.z]);
   nav.cum = [0];
@@ -6507,6 +6804,7 @@ function frame() {
   updateNitros(dt, t);
   updateBills(dt, t);
   updateRadars(dt);
+  updatePeds(dt, t);
   updateFlyers(dt);
   updateCamera(dt, t);
   updateWorld(dt);
