@@ -3436,6 +3436,10 @@ function buildRealWorld(id, D, cityStyle) {
   W.spawn = D.spawn;
   W.credit = '© OpenStreetMap';
   if (D.limit) W.km2 = Math.abs(ringOf(D.limit).reduce((s, [x0, z0], k, r) => { const [x1, z1] = r[(k + 1) % r.length]; return s + x0 * z1 - x1 * z0; }, 0)) / 2e6;
+  if (D.place) {                                                       // carte générée : pour passer à la zone suivante
+    W.geo = CityGen.projection(D.origin.lat, D.origin.lon);
+    W.zoneCenter = W.geo.proj(D.place.lat, D.place.lon);
+  }
 
   // relief (grille SRTM lissée) + masque eau / verdure
   const dem = D.dem, H = Float32Array.from(dem.h);
@@ -6773,18 +6777,19 @@ function win() {
   refreshMenu();
   setTimeout(() => $('btn-again').focus({ preventScroll: true }), 50);
 }
-function resetRun() {
+// keepCar : on garde le char où il est, lancé (passage à la zone suivante)
+function resetRun(keepCar) {
   stopNav();
   if (world.peds) { if (world.peds.fare) endFare(false); for (const q of world.peds.hail) q.hail = false; world.peds.hail = []; }
   for (const c of world.coins) { c.taken = false; c.mesh.visible = true; c.beam.visible = true; }
   collected = 0;
   elapsed = 0;
-  car.nitro = 1; car.boost = 0;
+  if (!keepCar) { car.nitro = 1; car.boost = 0; }
   if (world.statues) for (const st of world.statues) st.seen = false;
   if (world.nitros) for (const n of world.nitros.list) { n.taken = false; n.t = 0; }
   if (world.siteOn) resetChantier(world.site);
   resetCrashes();
-  respawn(false);
+  if (!keepCar) respawn(false);
   scatterCrowds();
   clearSkids();
 }
@@ -6947,6 +6952,7 @@ const BUILD_NOTE = { invente: 'Construction du monde…', quebec: 'Construction 
 async function selectWorld(id) {
   if (!available(id)) id = 'invente';
   if (world && world.id === id && worlds[id] === world) return;
+  resetZones();
   if (!worlds[id]) {
     el.start.disabled = true;
     el.menuNote.textContent = id === 'ville' ? `Construction de ${genData.place.name} (${genData.buildings.length.toLocaleString('fr-CA')} bâtiments)…` : BUILD_NOTE[id];
@@ -6978,7 +6984,7 @@ let genRadius = RADII.includes(+store.get('gen-radius')) ? +store.get('gen-radiu
 let genAbort = null;                                                  // génération en cours (pour l'annuler)
 const genKey = (q, r) => `${normTxt(q)}|${r}`;
 const setGenNote = msg => { $('gen-note').textContent = msg; };
-// Les 8 dernières cartes générées restent dans IndexedDB : on les retrouve sans retélécharger
+// Les 12 dernières cartes générées (villes et zones voisines) restent dans IndexedDB : on les retrouve sans retélécharger
 const genCache = {
   db: null,
   open() {
@@ -7003,7 +7009,7 @@ const genCache = {
       let keys = [];
       try { keys = JSON.parse(store.get('gen-keys') || '[]'); } catch (e) { /* liste abîmée : on repart de zéro */ }
       keys = [k, ...keys.filter(x => x !== k)];
-      const old = keys.splice(8);
+      const old = keys.splice(12);
       await this.run('readwrite', st => { st.put(D, k); for (const o of old) st.delete(o); });
       store.set('gen-keys', JSON.stringify(keys));
     } catch (e) { /* stockage indisponible : on retéléchargera */ }
@@ -7018,10 +7024,12 @@ function setGenBusy(on) {
 // Libère une carte générée remplacée par une autre : ses géométries, et les matériaux et textures qui ne servent plus ailleurs
 function disposeWorld(W) {
   const objs = new Set(), mats = new Set(), keep = new Set(), keepGeo = new Set();
-  const matsOf = (o, into) => { if (o.material) for (const m of [].concat(o.material)) into.add(m); };
+  const addAll = (into, m) => { for (const x of [].concat(m || [])) into.add(x); };   // un matériau, ou une liste (multi-matériaux)
+  const matsOf = (o, into) => addAll(into, o.material);
   for (const g of [W.group, W.site && W.site.group]) if (g) g.traverse(o => { objs.add(o); matsOf(o, mats); });
   for (const e of styled) {
-    if (objs.has(e.obj)) { mats.add(e.normal); mats.add(e.retro); } else { keep.add(e.normal); keep.add(e.retro); }
+    const into = objs.has(e.obj) ? mats : keep;
+    addAll(into, e.normal); addAll(into, e.retro);
   }
   const kept = o => { matsOf(o, keep); if (o.geometry) keepGeo.add(o.geometry); };
   scene.traverse(kept);
@@ -7048,11 +7056,12 @@ async function generateCity() {
   store.set('gen-city', q);
   const key = genKey(q, genRadius), prev = worlds.ville, ac = new AbortController();
   genAbort = ac;
+  resetZones();
   setGenBusy(true);
   try {
     let D = await genCache.get(key);
     if (!D) {
-      D = await CityGen.generate(q, genRadius, { status: setGenNote, signal: ac.signal });
+      D = await CityGen.generateAsync(q, genRadius, { status: setGenNote, signal: ac.signal });
       await genCache.put(key, D);
     }
     if (ac.signal.aborted) throw new DOMException('Génération annulée', 'AbortError');
@@ -7090,6 +7099,95 @@ async function restoreGenerated() {
 $('gen-city').value = store.get('gen-city') || '';
 $('radius-' + genRadius).checked = true;
 document.querySelectorAll('input[name="radius"]').forEach(r => r.addEventListener('change', () => { genRadius = +r.value; store.set('gen-radius', r.value); }));
+
+// ---------- Zone suivante : sur une carte générée, en s'approchant du bord, la zone d'à côté se prépare (Worker) ;
+// au bord, on y passe. Le char garde sa vraie position (lat/lon), sa vitesse et son cap ; chaque zone est une
+// nouvelle course (ses 32 pièces, le chrono repart). ----------
+const zones = { job: null, ready: null, entering: false, failT: 0, noteT: 0, note: '' };
+function resetZones() {
+  if (zones.job) zones.job.ac.abort();
+  zones.job = zones.ready = null;
+  zones.failT = 0;
+}
+function startZone(key, lat, lon, R) {
+  const job = { key, ac: new AbortController() };
+  zones.job = job;
+  zones.note = 'Préparation de la zone suivante…';
+  (async () => {
+    let D = await genCache.get(key);
+    if (!D) {
+      D = await CityGen.generateAsync({ lat, lon, name: world.D.place.name }, R, { status: s => { zones.note = `Zone suivante · ${s}`; }, signal: job.ac.signal });
+      await genCache.put(key, D);
+    }
+    if (zones.job === job) zones.ready = { key, D };
+  })().catch(e => {
+    if (zones.job !== job || e.name === 'AbortError') return;
+    console.warn(e);
+    zones.failT = 30;
+    zones.note = `Zone suivante indisponible (${e.message}) : nouvel essai dans 30 s.`;
+  }).finally(() => { if (zones.job === job) zones.job = null; });
+}
+function updateZones(dt) {
+  if (!world.geo || state === 'menu' || zones.entering || genAbort) return;
+  zones.failT -= dt;
+  const R = world.D.place.radius, [cx, cz] = world.zoneCenter;
+  const ox = car.pos.x - cx, oz = car.pos.z - cz, d = Math.hypot(ox, oz) || 1, ux = ox / d, uz = oz / d;
+  if (d < R * 0.55) return;
+  // une zone convient si le point (x, z) y est à au moins m mètres de son bord
+  const fits = (D, x, z, m) => { const [qx, qz] = world.geo.proj(D.place.lat, D.place.lon); return Math.hypot(x - qx, z - qz) < R - m; };
+  const r = zones.ready;
+  if (r && d > R - 60 && fits(r.D, car.pos.x, car.pos.z, R * 0.3)) { enterZone(r); return; }
+  // à préparer : centrée 1,2 R plus loin dans la direction du char, calée sur une grille de R/2 (on retombe sur le cache)
+  if (!zones.job && zones.failT <= 0 && !(r && fits(r.D, cx + ux * R, cz + uz * R, R * 0.3))) {
+    const [tl, tn] = world.geo.unproj(cx + ux * R * 1.2, cz + uz * R * 1.2);
+    const sl = R / 2 / 111132, sn = R / 2 / (111320 * Math.cos(tl * Math.PI / 180));
+    const lat = Math.round(tl / sl) * sl, lon = Math.round(tn / sn) * sn;
+    startZone(`zone|${lat.toFixed(5)}|${lon.toFixed(5)}|${R}`, lat, lon, R);
+  }
+  // au bord, en attendant : où en est la zone suivante
+  if (d > R - 80 && (zones.noteT -= dt) <= 0) { zones.noteT = 1.5; toast(zones.note || 'Préparation de la zone suivante…', 1700); }
+}
+async function enterZone(z) {
+  zones.entering = true;
+  toast(`Zone suivante : ${z.D.place.name}…`, 2500);
+  await new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));   // le panneau s'affiche avant la construction
+  try {
+    if (state === 'menu' || !world.geo) return;                       // menu ouvert entre-temps : on y passera au retour
+    zones.ready = null;
+    const old = world, [lat, lon] = old.geo.unproj(car.pos.x, car.pos.z);
+    stopNav();
+    if (old.peds && old.peds.fare) endFare(false);
+    genData = z.D;
+    WORLD_INFO.ville = genInfo(z.D);
+    const W = buildRealWorld('ville', z.D, 'ville');
+    worlds.ville = W;
+    scene.remove(old.group);
+    world = W;
+    scene.add(W.group);
+    setSite(W, mode === 'chantier');
+    streetShown = streetCand = '';
+    el.sign.hidden = true;
+    fillPlaceList();
+    applyStyle();
+    // même endroit du globe, nouvelles coordonnées : on décale le char et la caméra d'autant
+    const [x, zz] = W.geo.proj(lat, lon), dx = x - car.pos.x, dz = zz - car.pos.z, y0 = car.pos.y;
+    car.pos.x = x;
+    car.pos.z = zz;
+    if (car.grounded) car.pos.y = W.ground(x, zz);
+    camPos.x += dx; camPos.z += dz; camPos.y += car.pos.y - y0;
+    const P = W.parked;                                               // pas de voiture stationnée pile où on arrive
+    if (P && W.hideParked) W.hideParked(P.list.map((v, i) => i).filter(i => !P.list[i].ai && Math.hypot(P.list[i].x - x, P.list[i].z - zz) < 6), true);
+    resetRun(true);
+    state = 'play';
+    gameActive = true;
+    el.win.hidden = true;
+    store.set('map', 'ville');
+    store.set('gen-last', z.key);
+    refreshMenu();
+    disposeWorld(old);
+    toast(`${z.D.place.name} · ${W.coins.length} nouvelles pièces`, 2400);
+  } finally { zones.entering = false; }
+}
 
 // ---------- Clavier, boutons, tactile ----------
 addEventListener('keydown', e => {
@@ -7680,6 +7778,7 @@ function frame() {
   updateRadars(dt);
   updatePeds(dt, t);
   updateFlyers(dt);
+  updateZones(dt);
   updateCamera(dt, t);
   updateWorld(dt);
   updateAudio(inp, drifting);

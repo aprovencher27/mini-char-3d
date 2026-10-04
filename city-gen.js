@@ -5,7 +5,7 @@
 //   - le jeu (navigateur) : la carte de n'importe quelle ville, téléchargée et calculée à la demande (CityGen.generate).
 //
 // Repère du jeu : 1 unité = 1 m, x = -est, z = nord (le nord est en haut de la mini-carte).
-(function (root) {
+(function cityGen(root) {
 'use strict';
 
 const DEM_STEP = 30;       // m entre deux points d'altitude
@@ -125,6 +125,14 @@ function queries(A) {
   return q.map(([name, body, pad = 0]) => ({ name, body, pad }));
 }
 
+// Projection locale autour de (lat0, lon0), en mètres : x = -est, z = nord
+function projection(lat0, lon0) {
+  const phi = lat0 * Math.PI / 180;
+  const kLat = 111132.92 - 559.82 * Math.cos(2 * phi) + 1.175 * Math.cos(4 * phi);
+  const kLon = 111412.84 * Math.cos(phi) - 93.5 * Math.cos(3 * phi);
+  return { proj: (lat, lon) => [-(lon - lon0) * kLon, (lat - lat0) * kLat], unproj: (x, z) => [lat0 + z / kLat, lon0 - x / kLon] };
+}
+
 // ---------------------------------------------------------------------------
 // Cadre d'une carte : zone à télécharger, projection, grille d'altitudes.
 // lines : le contour du territoire (lignes de points { lat, lon }), ou null (on garde A.bbox)
@@ -138,11 +146,7 @@ function frame(A, lines, district) {
     BBOX = { s: s - pLat, n: n + pLat, w: w - pLon, e: e + pLon };
   }
   const lat0 = (BBOX.s + BBOX.n) / 2, lon0 = (BBOX.w + BBOX.e) / 2;
-  const phi = lat0 * Math.PI / 180;
-  const kLat = 111132.92 - 559.82 * Math.cos(2 * phi) + 1.175 * Math.cos(4 * phi);
-  const kLon = 111412.84 * Math.cos(phi) - 93.5 * Math.cos(3 * phi);
-  const proj = (lat, lon) => [-(lon - lon0) * kLon, (lat - lat0) * kLat];
-  const unproj = (x, z) => [lat0 + z / kLat, lon0 - x / kLon];
+  const { proj, unproj } = projection(lat0, lon0);
   const B = { minX: proj(lat0, BBOX.e)[0], maxX: proj(lat0, BBOX.w)[0], minZ: proj(BBOX.s, lon0)[1], maxZ: proj(BBOX.n, lon0)[1] };
   const margin = 90;
   const dem = {
@@ -851,7 +855,8 @@ async function compute(A, F, raw, log) {
 // ===========================================================================
 // Navigateur : la carte de n'importe quelle ville, à la demande
 //   nom de lieu → Nominatim (ou Photon) → un cercle de « radius » m autour → une seule requête Overpass
-//   (les catégories séparées par des marqueurs « make ») → relief des tuiles Terrarium (AWS) → compute
+//   (les catégories séparées par des marqueurs « make ») → relief des tuiles Terrarium (AWS) → compute.
+//   CityGen.generateAsync fait tout ça dans un Worker : le jeu reste fluide (zone suivante préparée en roulant).
 // ===========================================================================
 const OVERPASS = ['https://overpass-api.de/api/interpreter', 'https://maps.mail.ru/osm/tools/overpass/api/interpreter', 'https://overpass.private.coffee/api/interpreter'];
 // overpass-api.de refuse (406) une requête sans Referer : c'est le cas d'une page ouverte en fichier local (file://)
@@ -863,14 +868,17 @@ const wait = (ms, signal) => new Promise((ok, ko) => {
   if (signal) signal.addEventListener('abort', () => { clearTimeout(t); ko(ABORT()); }, { once: true });
 });
 const withTimeout = (signal, ms) => (AbortSignal.any && AbortSignal.timeout ? AbortSignal.any([signal || new AbortController().signal, AbortSignal.timeout(ms)]) : signal);
+// net : { signal, referrer, localFile }. referrer : dans le Worker, l'adresse de la page (sinon aucun Referer ne part)
+const get = (net, url, ms, init = {}) => fetch(url, { ...init, signal: withTimeout(net.signal, ms), ...(net.referrer ? { referrer: net.referrer } : {}) });
 
 // Réglages d'une carte générée : un cercle de « radius » m autour du lieu, densités selon la superficie
 function liveArea(place, radius) {
-  const km2 = Math.PI * (radius / 1000) ** 2, phi = place.lat * Math.PI / 180;
-  const kLat = 111132.92 - 559.82 * Math.cos(2 * phi) + 1.175 * Math.cos(4 * phi);
-  const kLon = 111412.84 * Math.cos(phi) - 93.5 * Math.cos(3 * phi);
+  const km2 = Math.PI * (radius / 1000) ** 2, { unproj } = projection(place.lat, place.lon);
   const ring = [];
-  for (let k = 0; k <= 96; k++) { const a = (k % 96) / 96 * Math.PI * 2; ring.push({ lat: place.lat + Math.sin(a) * radius / kLat, lon: place.lon + Math.cos(a) * radius / kLon }); }
+  for (let k = 0; k <= 96; k++) {
+    const a = (k % 96) / 96 * Math.PI * 2, [lat, lon] = unproj(-Math.cos(a) * radius, Math.sin(a) * radius);
+    ring.push({ lat, lon });
+  }
   return {
     boundary: { drive: 12, keep: 120 }, lines: [ring],
     river: 'auto',
@@ -881,16 +889,16 @@ function liveArea(place, radius) {
   };
 }
 
-async function geocode(q, signal) {
+async function geocode(q, net) {
   const tries = [
     async () => {
-      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&accept-language=fr&q=${encodeURIComponent(q)}`, { signal: withTimeout(signal, 15000) });
+      const res = await get(net, `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&accept-language=fr&q=${encodeURIComponent(q)}`, 15000);
       if (!res.ok) throw new Error(`Nominatim : ${res.status}`);
       const r = (await res.json())[0];
       return r && { lat: +r.lat, lon: +r.lon, name: r.name || q, label: r.display_name || r.name || q };
     },
     async () => {
-      const res = await fetch(`https://photon.komoot.io/api/?limit=1&lang=fr&q=${encodeURIComponent(q)}`, { signal: withTimeout(signal, 15000) });
+      const res = await get(net, `https://photon.komoot.io/api/?limit=1&lang=fr&q=${encodeURIComponent(q)}`, 15000);
       if (!res.ok) throw new Error(`Photon : ${res.status}`);
       const f = (await res.json()).features?.[0];
       if (!f) return null;
@@ -900,11 +908,24 @@ async function geocode(q, signal) {
   ];
   let err = null;
   for (const t of tries) {
-    try { const r = await t(); if (r) return r; } catch (e) { if (signal && signal.aborted) throw ABORT(); err = e.name === 'TypeError' ? new Error('pas de connexion') : e; }
+    try { const r = await t(); if (r) return r; } catch (e) { if (net.signal && net.signal.aborted) throw ABORT(); err = e.name === 'TypeError' ? new Error('pas de connexion') : e; }
   }
   const e = new Error(err ? `la recherche de lieux ne répond pas (${err.message})` : `« ${q} » introuvable`);
   e.notFound = !err;
   throw e;
+}
+
+// Nom d'une zone voisine (le quartier, sinon la ville) ; sans réponse, le nom qu'on avait déjà
+async function reverse({ lat, lon, name }, net) {
+  try {
+    const res = await get(net, `https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=14&accept-language=fr&lat=${lat}&lon=${lon}`, 15000);
+    if (res.ok) {
+      const r = await res.json(), a = r.address || {};
+      const n = a.neighbourhood || a.quarter || a.suburb || a.city_district || a.village || a.town || a.city || r.name;
+      if (n) return { lat, lon, name: n, label: r.display_name || n };
+    }
+  } catch (e) { if (net.signal && net.signal.aborted) throw ABORT(); }
+  return { lat, lon, name: name || 'Zone voisine', label: name || 'Zone voisine' };
 }
 
 // lit la réponse morceau par morceau pour afficher les mégaoctets reçus
@@ -923,15 +944,15 @@ async function readText(res, onBytes) {
   return parts.join('');
 }
 
-async function overpassAll(BBOX, list, status, signal) {
+async function overpassAll(BBOX, list, status, net) {
   const q = `[out:json][timeout:120][bbox:${BBOX.s},${BBOX.w},${BBOX.n},${BBOX.e}];` + list.map(({ name, body }) => `make set n="${name}";out;${body}`).join('');
-  const eps = LOCAL_FILE ? [...OVERPASS.slice(1), OVERPASS[0]] : OVERPASS;
+  const eps = net.localFile ? [...OVERPASS.slice(1), OVERPASS[0]] : OVERPASS, signal = net.signal;
   let err = null;
   for (let attempt = 0; attempt <= eps.length; attempt++) {          // chaque serveur, puis le premier une seconde fois
     const ep = eps[attempt % eps.length], host = new URL(ep).host;
     try {
       status(`Téléchargement d'OpenStreetMap (${host})…`);
-      const res = await fetch(ep, { method: 'POST', body: new URLSearchParams({ data: q }), signal: withTimeout(signal, 150000) })
+      const res = await get(net, ep, 150000, { method: 'POST', body: new URLSearchParams({ data: q }) })
         .catch(e => { throw signal && signal.aborted ? e : new Error(e.name === 'TimeoutError' ? `${host} ne répond pas` : `${host} injoignable`); });
       if (!res.ok) throw new Error(res.status === 429 ? `${host} est débordé (429)` : `${host} a répondu ${res.status}`);
       const text = await readText(res, n => status(`Téléchargement d'OpenStreetMap : ${(n / 1e6).toFixed(1).replace('.', ',')} Mo…`));
@@ -959,11 +980,11 @@ async function overpassAll(BBOX, list, status, signal) {
     }
   }
   throw new Error(`OpenStreetMap ne répond pas (${err ? err.message : 'erreur inconnue'})` +
-    (LOCAL_FILE ? ' ; le jeu est ouvert comme fichier local : lance-le plutôt par un petit serveur web (par ex. « npx serve »)' : ''));
+    (net.localFile ? ' ; le jeu est ouvert comme fichier local : lance-le plutôt par un petit serveur web (par ex. « npx serve »)' : ''));
 }
 
 // Altitudes : tuiles Terrarium (PNG, altitude = R × 256 + G + B / 256 − 32768 m), lues au zoom 13 (~13 m par pixel)
-async function terrarium(F, signal) {
+async function terrarium(F, net) {
   const pts = F.demPoints(), Z = 13, N = 2 ** Z, S = 256;
   const gx = lon => ((lon + 180) / 360) * N * S - 0.5;
   const gy = lat => { const r = lat * Math.PI / 180; return ((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * N * S - 0.5; };
@@ -973,17 +994,16 @@ async function terrarium(F, signal) {
   for (let ty = Math.floor(y0 / S); ty <= Math.floor((y1 + 1) / S); ty++) for (let tx = Math.floor(x0 / S); tx <= Math.floor((x1 + 1) / S); tx++) {
     jobs.push((async () => {
       try {
-        const res = await fetch(TERRARIUM(Z, tx, ty), { signal: withTimeout(signal, 30000) });
+        const res = await get(net, TERRARIUM(Z, tx, ty), 30000);
         if (!res.ok) return;
         const bmp = await createImageBitmap(await res.blob(), { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
-        const c = document.createElement('canvas');
-        c.width = c.height = S;
+        const c = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(S, S) : Object.assign(document.createElement('canvas'), { width: S, height: S });
         const g = c.getContext('2d', { willReadFrequently: true });
         g.drawImage(bmp, 0, 0);
         const px = g.getImageData(0, 0, S, S).data, h = new Float32Array(S * S);
         for (let k = 0; k < S * S; k++) h[k] = px[k * 4] * 256 + px[k * 4 + 1] + px[k * 4 + 2] / 256 - 32768;
         tiles.set(`${tx},${ty}`, h);
-      } catch (e) { if (signal && signal.aborted) throw ABORT(); }
+      } catch (e) { if (net.signal && net.signal.aborted) throw ABORT(); }
     })());
   }
   await Promise.all(jobs);
@@ -997,21 +1017,24 @@ async function terrarium(F, signal) {
   return { ...F.dem, h };
 }
 
-// La carte complète de « query » dans un rayon de « radius » m. status(texte) : où on en est.
-async function generate(query, radius, { status = () => {}, signal } = {}) {
+// La carte complète dans un rayon de « radius » m autour de « query » : un nom de lieu, ou { lat, lon, name }
+// (zone voisine : son nom vient du quartier). status(texte) : où on en est.
+async function generate(query, radius, { status = () => {}, signal, referrer, localFile = LOCAL_FILE } = {}) {
+  const net = { signal, referrer, localFile };
   const step = async msg => {
     if (signal && signal.aborted) throw ABORT();
     status(msg);
     await wait(0, signal);                                             // laisse le navigateur se redessiner
   };
-  await step(`Recherche de « ${query} »…`);
-  const place = await geocode(query, signal);
+  const near = typeof query === 'object';
+  await step(near ? 'Recherche du nom du quartier…' : `Recherche de « ${query} »…`);
+  const place = near ? await reverse(query, net) : await geocode(query, net);
   const A = liveArea(place, radius);
   const F = frame(A, A.lines, place.name);
   await step(`${place.label} : téléchargement d'OpenStreetMap…`);
-  const raw = await overpassAll(F.BBOX, queries(A), status, signal);
+  const raw = await overpassAll(F.BBOX, queries(A), status, net);
   await step('Relief du terrain…');
-  try { raw.dem = await terrarium(F, signal); } catch (e) {
+  try { raw.dem = await terrarium(F, net); } catch (e) {
     if (signal && signal.aborted) throw e;
     raw.dem = { ...F.dem, h: new Array(F.dem.nx * F.dem.nz).fill(0) };   // sans relief : terrain plat
   }
@@ -1021,7 +1044,61 @@ async function generate(query, radius, { status = () => {}, signal } = {}) {
   return data;
 }
 
-const CityGen = { DEM_STEP, queries, frame, compute, liveArea, generate };
+// ---------- Worker : la génération tourne à côté du jeu ----------
+// Il est fabriqué avec le code de ce fichier même (cityGen), ce qui marche aussi quand le jeu est ouvert en fichier local.
+if (typeof WorkerGlobalScope !== 'undefined' && root instanceof WorkerGlobalScope) {
+  const running = new Map();
+  root.onmessage = async ({ data: m }) => {
+    if (m.abort) { const ac = running.get(m.id); if (ac) ac.abort(); return; }
+    const ac = new AbortController();
+    running.set(m.id, ac);
+    try {
+      const data = await generate(m.query, m.radius, { status: s => root.postMessage({ id: m.id, status: s }), signal: ac.signal, referrer: m.referrer, localFile: m.localFile });
+      root.postMessage({ id: m.id, data });
+    } catch (e) {
+      root.postMessage({ id: m.id, error: { name: e.name, message: e.message, notFound: !!e.notFound } });
+    } finally { running.delete(m.id); }
+  };
+}
+let worker = null;                                                    // null : pas encore créé ; false : impossible ici
+const jobs = new Map();
+let jobId = 0;
+function spawnWorker() {
+  if (worker !== null) return worker;
+  try {
+    worker = new Worker(URL.createObjectURL(new Blob([`(${cityGen})(self);`], { type: 'text/javascript' })));
+    worker.onmessage = ({ data: m }) => {
+      const j = jobs.get(m.id);
+      if (!j) return;
+      if (m.status) { j.status(m.status); return; }
+      jobs.delete(m.id);
+      if (m.error) j.ko(m.error.name === 'AbortError' ? ABORT() : Object.assign(new Error(m.error.message), { notFound: m.error.notFound }));
+      else j.ok(m.data);
+    };
+    worker.onerror = e => {                                          // le Worker n'a pas pu démarrer : on fait tout ici
+      e.preventDefault();
+      worker.terminate();
+      worker = false;
+      for (const j of jobs.values()) generate(j.query, j.radius, j.opts).then(j.ok, j.ko);
+      jobs.clear();
+    };
+  } catch (e) { worker = false; }
+  return worker;
+}
+// Comme generate, mais dans le Worker (ou ici même s'il n'a pas pu démarrer)
+function generateAsync(query, radius, opts = {}) {
+  const w = typeof Worker !== 'undefined' ? spawnWorker() : false;
+  if (!w) return generate(query, radius, opts);
+  return new Promise((ok, ko) => {
+    const id = ++jobId, { status = () => {}, signal } = opts;
+    jobs.set(id, { ok, ko, status, query, radius, opts });
+    const referrer = typeof location !== 'undefined' && /^https?:$/.test(location.protocol) ? location.href : undefined;
+    w.postMessage({ id, query, radius, referrer, localFile: LOCAL_FILE });
+    if (signal) signal.addEventListener('abort', () => { if (worker) worker.postMessage({ id, abort: true }); }, { once: true });
+  });
+}
+
+const CityGen = { DEM_STEP, queries, frame, compute, projection, liveArea, generate, generateAsync };
 root.CityGen = CityGen;
 if (typeof module === 'object' && module.exports) module.exports = CityGen;
 })(typeof window !== 'undefined' ? window : globalThis);
