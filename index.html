@@ -217,13 +217,21 @@
   .voice-note { margin: 0 0 14px; }
   .goto-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin: 6px 0 6px; }
   .goto-row label { font-size: 12px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; opacity: 0.85; }
-  #goto-input {
+  #goto-input, #gen-city {
     flex: 1 1 240px; min-width: 0; padding: 8px 11px; border-radius: 8px; border: 2px solid var(--sign-white);
     background: var(--sign-white); color: var(--ink); font: 600 15px var(--font-ui); user-select: text; -webkit-user-select: text;
   }
+  #gen-city { font-size: 17px; padding: 10px 12px; }
+  #gen-city:disabled { opacity: 0.7; }
   .fine.goto-note { margin: 0 0 12px; }
   body.retro .goto-row label { font-family: var(--font-display); font-size: 9px; }
-  body.retro #goto-input { background: var(--sign-green); color: var(--sign-white); font-size: 18px; }
+  body.retro #goto-input, body.retro #gen-city { background: var(--sign-green); color: var(--sign-white); font-size: 18px; }
+  /* écran de départ : générateur de ville */
+  .gen { margin: 0 0 18px; padding: 12px 0 14px; border-block: 2px solid var(--sign-white); }
+  .gen .goto-row { margin: 0 0 12px; }
+  .gen .opt { margin: 0 0 14px; }
+  .gen .actions { margin: 0 0 10px; }
+  .fine.gen-note { min-height: 2.8em; line-height: 1.4; overflow-wrap: anywhere; }
   /* GPS : prochaine manœuvre, sous le panneau de rue */
   #nav {
     left: 50%; top: calc(var(--top) + 96px); transform: translateX(-50%);
@@ -451,21 +459,33 @@
 </div>
 
 <div id="menu" class="overlay">
-  <!-- Écran de départ : seulement la carte -->
+  <!-- Écran de départ : le générateur de ville -->
   <section class="sign-panel" id="menu-main" aria-labelledby="menu-title">
     <p class="eyebrow" id="menu-eyebrow">Départ · Centre-ville</p>
     <h1 id="menu-title">Mini Char 3D</h1>
-    <p class="lede">Ramasse les <strong id="menu-count">32 pièces d'or</strong> le plus vite possible.</p>
-    <fieldset class="opt maps">
-      <legend>Carte</legend>
-      <div class="map-cards">
-        <label><input type="radio" name="map" value="invente" id="map-invente"><span><strong>Monde inventé</strong><small>Tremplins, collines et lacs</small></span></label>
-        <label><input type="radio" name="map" value="quebec" id="map-quebec"><span><strong>Vieux-Québec</strong><small>Jusqu'à Montcalm et aux plaines</small></span></label>
-        <label><input type="radio" name="map" value="plateau" id="map-plateau"><span><strong>Plateau-Mont-Royal</strong><small>Tout l'arrondissement</small></span></label>
+    <p class="lede">Choisis une ville, on en génère la carte : ramasse les <strong id="menu-count">32 pièces d'or</strong> le plus vite possible.</p>
+    <div class="gen" role="group" aria-labelledby="gen-title">
+      <div class="goto-row">
+        <label for="gen-city" id="gen-title">Ville</label>
+        <input id="gen-city" type="text" placeholder="Sherbrooke, Gaspé, rue Wellington à Verdun, Paris…" autocomplete="off" spellcheck="false" enterkeyhint="go">
       </div>
-    </fieldset>
+      <fieldset class="opt">
+        <legend>Rayon autour</legend>
+        <div class="seg" style="--n: 4">
+          <label><input type="radio" name="radius" value="500" id="radius-500"><span>500 m</span></label>
+          <label><input type="radio" name="radius" value="1000" id="radius-1000"><span>1 km</span></label>
+          <label><input type="radio" name="radius" value="1500" id="radius-1500"><span>1,5 km</span></label>
+          <label><input type="radio" name="radius" value="2000" id="radius-2000"><span>2 km</span></label>
+        </div>
+      </fieldset>
+      <div class="actions">
+        <button id="btn-gen" class="btn" type="button">Générer la carte</button>
+        <button id="btn-gen-stop" class="btn ghost" type="button" hidden>Annuler</button>
+      </div>
+      <p class="fine gen-note" id="gen-note" aria-live="polite">Une ville, un quartier ou une adresse : les rues, les bâtiments et les commerces viennent d'OpenStreetMap. Plus le rayon est grand, plus c'est long (2 km : une minute ou plus).</p>
+    </div>
     <div class="actions">
-      <button id="btn-start" class="btn" type="button">Démarrer</button>
+      <button id="btn-start" class="btn ghost" type="button">Démarrer</button>
       <button id="btn-new" class="btn ghost" type="button" hidden>Nouvelle partie</button>
       <button id="btn-adv" class="btn ghost" type="button">Options avancées</button>
     </div>
@@ -486,6 +506,14 @@
     </div>
 
     <div class="tabpane" data-pane="partie" role="tabpanel">
+      <fieldset class="opt maps">
+        <legend>Cartes prêtes</legend>
+        <div class="map-cards">
+          <label><input type="radio" name="map" value="invente" id="map-invente"><span><strong>Monde inventé</strong><small>Tremplins, collines et lacs</small></span></label>
+          <label><input type="radio" name="map" value="quebec" id="map-quebec"><span><strong>Vieux-Québec</strong><small>Jusqu'à Montcalm et aux plaines</small></span></label>
+          <label><input type="radio" name="map" value="plateau" id="map-plateau"><span><strong>Plateau-Mont-Royal</strong><small>Tout l'arrondissement</small></span></label>
+        </div>
+      </fieldset>
       <div class="options two">
         <fieldset class="opt">
           <legend>Mode</legend>
@@ -581,7 +609,8 @@
   </section>
 </div>
 
-<!-- Cartes réelles (générées par tools/build-city.mjs) -->
+<!-- Générateur de cartes réelles (n'importe quelle ville, à la demande) et cartes fournies (générées par tools/build-city.mjs) -->
+<script src="city-gen.js"></script>
 <script src="vieux-quebec.js"></script>
 <script src="plateau-mont-royal.js"></script>
 
@@ -637,6 +666,8 @@ const rrange = (a, b) => a + (b - a) * rand();
 const hash01 = n => { let h = (n + 1) * 374761393 | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
 const pick = (list, u) => list[Math.floor(u * list.length) % list.length];
 const pickW = (list, u) => { let t = u * list.reduce((s, x) => s + x[1], 0); for (const [v, w] of list) { if (t < w) return v; t -= w; } return list[list.length - 1][0]; };
+// Quantités réglées carte par carte ; une carte générée prend celles du Plateau (8,2 km²) à l'échelle de sa superficie
+const perMap = (W, t, def) => t[W.id] ?? (W.km2 ? Math.round(clamp(t.plateau * W.km2 / 8.2, (t.quebec ?? def) * 0.3, t.plateau)) : def);
 function fmt(s) {
   const tenths = Math.floor(s * 10);
   const m = Math.floor(tenths / 600), sec = Math.floor((tenths % 600) / 10), d = tenths % 10;
@@ -1259,11 +1290,11 @@ const curtainTex = makeTexture(64, (g, W, H) => {
   for (let x = 0; x < W; x += 16) g.fillRect(x, 0, 2, H);
 }, 128);
 // Panneau « Limite de l'arrondissement » (dessiné à la construction de la carte, une fois les polices chargées)
-const limitSignTex = (bg, fg, name) => makeTexture(512, (g, W, H) => {
+const limitSignTex = (bg, fg, name, title = 'LIMITE DE L’ARRONDISSEMENT') => makeTexture(512, (g, W, H) => {
   g.fillStyle = bg; g.fillRect(0, 0, W, H);
   g.strokeStyle = fg; g.lineWidth = 10; g.strokeRect(12, 12, W - 24, H - 24);
   g.fillStyle = fg; g.textAlign = 'center'; g.textBaseline = 'middle';
-  g.font = '600 42px "Barlow Semi Condensed", "Arial Narrow", Arial, sans-serif'; g.fillText('LIMITE DE L’ARRONDISSEMENT', W / 2, H * 0.3, W - 70);
+  g.font = '600 42px "Barlow Semi Condensed", "Arial Narrow", Arial, sans-serif'; g.fillText(title, W / 2, H * 0.3, W - 70);
   g.font = '700 66px "Barlow Semi Condensed", "Arial Narrow", Arial, sans-serif'; g.fillText(name, W / 2, H * 0.64, W - 70);
 }, 256);
 
@@ -1681,6 +1712,15 @@ const CITY_STYLES = {
     trims: [0x2b2320, 0x1c1d1f, 0x2d4a3d, 0xe9e5dc, 0x5a2e25, 0x3d3f44].map(col3),
     metalRoofs: [[COPPER, 0.6], [col3(0x7d858c), 0.4]], hip: false, pitch: 0.9, parapet: 0.8, cornice: 0.45,
     balconies: 0.85, stairs: 0.45, shopsOn: [0], shopChance: 1, doorSpacing: 3.6, dormers: false, chimneys: false, ac: 0.35, plex: true,
+  },
+  // carte générée (n'importe quelle ville) : brique et parements variés, maisons à toit en croupe, sans les escaliers des plex
+  ville: {
+    facades: [[FAC.brickRed, 0.26], [FAC.painted, 0.26], [FAC.brickBeige, 0.18], [FAC.brickBrown, 0.15], [FAC.greystone, 0.1], [FAC.stucco, 0.05]], churchFacade: FAC.greystone,
+    paints: [0xe9d8b8, 0xc7d3dd, 0xd8cbb0, 0xa6cfb0, 0xe6e1d6, 0x9fb3a8, 0xf0ece2].map(col3),
+    trims: [0xe9e5dc, 0x2b2320, 0x3b4148, 0x2d4a3d, 0x5a2e25].map(col3),
+    metalRoofs: [[col3(0x4a4f55), 0.4], [col3(0x6b5d52), 0.25], [col3(0x7d858c), 0.2], [COPPER, 0.15]],
+    hip: true, pitch: 0.9, parapet: 0.6, cornice: 0.3,
+    balconies: 0.3, stairs: 0, shopsOn: [0], shopChance: 0.6, doorSpacing: 6, dormers: false, chimneys: true, ac: 0.4,
   },
 };
 
@@ -3391,9 +3431,11 @@ function buildRealWorld(id, D, cityStyle) {
   seed = id === 'quebec' ? 4242 : 5151;
   const W = newWorld(id);
   W.real = true;
+  W.D = D;
   W.fog = [140, 720];
   W.spawn = D.spawn;
   W.credit = '© OpenStreetMap';
+  if (D.limit) W.km2 = Math.abs(ringOf(D.limit).reduce((s, [x0, z0], k, r) => { const [x1, z1] = r[(k + 1) % r.length]; return s + x0 * z1 - x1 * z0; }, 0)) / 2e6;
 
   // relief (grille SRTM lissée) + masque eau / verdure
   const dem = D.dem, H = Float32Array.from(dem.h);
@@ -3435,7 +3477,9 @@ function buildRealWorld(id, D, cityStyle) {
       }
       const lv = edge && D.waterLevel != null ? D.waterLevel : (isFinite(shore) ? shore - 0.35 : (D.waterLevel ?? 0));
       for (const c of cells) level[c] = lv;
-      waters.push({ lv, edge, i0, i1, j0, j1, cells: edge ? null : cells });
+      // fleuve (niveau connu) : un grand plan d'eau ; lac coupé par le bord de la carte : sa forme, comme un étang
+      const plane = edge && D.waterLevel != null;
+      waters.push({ lv, plane, i0, i1, j0, j1, cells: plane ? null : cells });
     }
     // on étend un peu le niveau sur la rive pour que le sol reste continu
     for (let pass = 0; pass < 2; pass++) {
@@ -3493,7 +3537,7 @@ function buildRealWorld(id, D, cityStyle) {
   let riverDone = false;
   const ponds = acc();
   for (const wa of waters) {
-    if (wa.edge) {
+    if (wa.plane) {
       if (!riverDone) addWaterPlane(W, cx - sx / 2, cx + sx / 2, cz - sz / 2, cz + sz / 2, wa.lv);
       riverDone = true;
       continue;
@@ -3633,10 +3677,10 @@ function buildRealWorld(id, D, cityStyle) {
         }
       }
     }
-    const name = D.district || 'Le Plateau-Mont-Royal';
+    const name = D.district || 'Le Plateau-Mont-Royal', title = D.place ? 'LIMITE DE LA CARTE' : undefined;
     const LM = {
-      normal: [CH_MATS.normal[0], CH_MATS.normal[1], new THREE.MeshStandardMaterial({ map: limitSignTex('#1f4f8f', '#ffffff', name), roughness: 0.5 }), blinkMat],
-      retro: [CH_MATS.retro[0], CH_MATS.retro[1], basic(0xffffff, { map: limitSignTex('#07020f', '#29f3ff', name) }), blinkRetro],
+      normal: [CH_MATS.normal[0], CH_MATS.normal[1], new THREE.MeshStandardMaterial({ map: limitSignTex('#1f4f8f', '#ffffff', name, title), roughness: 0.5 }), blinkMat],
+      retro: [CH_MATS.retro[0], CH_MATS.retro[1], basic(0xffffff, { map: limitSignTex('#07020f', '#29f3ff', name, title) }), blinkRetro],
     };
     const BA = [acc(), acc(), acc(), acc()];                           // poteaux, planches rayées, panneau, feux
     for (const c of crossings) {
@@ -3749,10 +3793,10 @@ function buildRealWorld(id, D, cityStyle) {
   plantTrees(W, trees);
   addCoins(W, D.coins);
   buildRoadGraph(W);
-  parkVehicles(W, id === 'plateau' ? 2200 : 800, id === 'plateau' ? 0.5 : 0.4);
-  addNitros(W, id === 'plateau' ? 30 : 16);
-  addBills(W, id === 'plateau' ? 45 : 32);
-  addRadars(W, id === 'plateau' ? 6 : 4);
+  parkVehicles(W, perMap(W, { plateau: 2200, quebec: 800 }, 800), id === 'plateau' ? 0.5 : 0.4);
+  addNitros(W, perMap(W, { plateau: 30, quebec: 16 }, 16));
+  addBills(W, perMap(W, { plateau: 45, quebec: 32 }, 32));
+  addRadars(W, perMap(W, { plateau: 6, quebec: 4 }, 4));
   buildPedestrians(W);
   buildCyclists(W);
 
@@ -4037,7 +4081,7 @@ function buildChantier(W) {
     }
   }
   for (let i = cands.length - 1; i > 0; i--) { const j = Math.floor(rand() * (i + 1)); [cands[i], cands[j]] = [cands[j], cands[i]]; }
-  const target = { plateau: 340, quebec: 110, invente: 90 }[W.id] ?? 110;
+  const target = perMap(W, { plateau: 340, quebec: 110, invente: 90 }, 110);
   const sites = [];
   for (const c of cands) {
     if (sites.length >= target) break;
@@ -4109,7 +4153,7 @@ function buildChantier(W) {
     }
   }
   // cônes semés un peu partout au bord des rues
-  const scatter = { plateau: 950, quebec: 350, invente: 300 }[W.id] ?? 350;
+  const scatter = perMap(W, { plateau: 950, quebec: 350, invente: 300 }, 350);
   for (let k = 0, q = 0; k < scatter && q < cands.length * 2; q++) {
     const c = cands[(q * 7 + 3) % cands.length], sd = rand() < 0.5 ? 1 : -1, a0 = rrange(-10, 10), n = 1 + Math.floor(rand() * 3);
     for (let m = 0; m < n; m++, k++) addCone(c.x + c.ux * (a0 + m * 1.3) - c.uz * sd * (c.w / 2 - 0.6), c.z + c.uz * (a0 + m * 1.3) + c.ux * sd * (c.w / 2 - 0.6));
@@ -4539,7 +4583,7 @@ function buildCyclists(W) {
   const cumW = (lo, hi) => { const c = []; let t = 0; for (let i = lo; i < hi; i++) { t += routes[i].len; c.push(t); } return c; };
   const cBike = cumW(0, nBike), cRoad = cumW(nBike, routes.length);
   const pickRoute = (c, lo) => { const t = rand() * c[c.length - 1]; let a = 0, b = c.length - 1; while (a < b) { const m = (a + b) >> 1; if (c[m] < t) a = m + 1; else b = m; } return routes[lo + a]; };
-  const N = { plateau: 320, quebec: 240, invente: 170 }[W.id] ?? 200, list = [];
+  const N = perMap(W, { plateau: 320, quebec: 240, invente: 170 }, 200), list = [];
   for (let i = 0; i < N; i++) {
     const onBike = nBike > 0 && (i % 3 !== 2 || nBike === routes.length) && cBike.length;
     const R = onBike ? pickRoute(cBike, 0) : cRoad.length ? pickRoute(cRoad, nBike) : pickRoute(cBike, 0);
@@ -4905,7 +4949,7 @@ function parkVehicles(W, cap, prob) {
   }
   // voitures qui circulent (sur le graphe routier)
   const aiList = [];
-  const nAI = W.graph ? ({ plateau: 80, quebec: 55, invente: 28 }[W.id] ?? 30) : 0;
+  const nAI = W.graph ? perMap(W, { plateau: 80, quebec: 55, invente: 28 }, 30) : 0;
   for (let k = 0; k < nAI; k++) {
     const type = pickW(TRAFFIC_TYPES, rand()), g = geos[type], V = VEHICLES[type], mass = PARK_MASS[type];
     const v = {
@@ -6215,7 +6259,7 @@ const taxiSignTex = makeTexture(128, (g, W, H) => {
 }, 64);
 function buildPedestrians(W) {
   seed = 555 + W.id.length * 91;
-  const D = REAL_WORLDS[W.id] && REAL_WORLDS[W.id].data();
+  const D = W.D;
   const shopGrid = new Grid(40);
   if (D) for (const s of D.shops || []) shopGrid.add(s, s.x, s.z, s.x, s.z);
   const lms = D ? D.landmarks || [] : [];
@@ -6242,7 +6286,7 @@ function buildPedestrians(W) {
   }
   scored.sort((a, b) => b.score - a.score);
   const routes = [];
-  const touristy = new Set(scored.slice(0, { plateau: 36, quebec: 36 }[W.id] ?? 24).map(q => q.way));
+  const touristy = new Set(scored.slice(0, perMap(W, { plateau: 36, quebec: 36 }, 24)).map(q => q.way));
   // tous les trottoirs : les rues touristiques pèsent beaucoup plus lourd
   const all = scored.filter(q => touristy.has(q.way));
   for (const way of W.roadWays) {
@@ -6264,7 +6308,7 @@ function buildPedestrians(W) {
     }
   }
   if (!routes.length) return;
-  const N = { plateau: 850, quebec: 850, invente: 360 }[W.id] ?? 400, list = [];
+  const N = perMap(W, { plateau: 850, quebec: 850, invente: 360 }, 400), list = [];
   const cum = []; let tot = 0;
   for (const r of routes) { tot += r.weight; cum.push(tot); }
   const pickR = () => { const t = rand() * tot; let a = 0, b = cum.length - 1; while (a < b) { const m = (a + b) >> 1; if (cum[m] < t) a = m + 1; else b = m; } return routes[a]; };
@@ -6461,7 +6505,7 @@ function startFare(p) {
   PS.hail = PS.hail.filter(q => q !== p);
   // destination : un lieu connu à 400–1600 m (monde inventé : un point de la ville)
   let dest = null;
-  const places = REAL_WORLDS[world.id] ? placeIndex(world).filter(q => q.kind === 'lieu' || q.kind === 'commerce' || q.kind === 'monument') : [];
+  const places = world.D ? placeIndex(world).filter(q => q.kind === 'lieu' || q.kind === 'commerce' || q.kind === 'monument') : [];
   for (let k = 0; k < 60 && !dest; k++) {
     let q;
     if (places.length) q = places[Math.floor(Math.random() * places.length)];
@@ -6639,14 +6683,34 @@ for (const [id, rw] of Object.entries(REAL_WORLDS)) {
   $('map-' + id).disabled = true;
   WORLD_INFO[id].note = `Données introuvables : lance « node tools/build-city.mjs » pour générer ${rw.file}.`;
 }
-const available = id => id === 'invente' || !!(REAL_WORLDS[id] && REAL_WORLDS[id].data()?.roads);
+// Carte générée (n'importe quelle ville, city-gen.js) : une seule à la fois, sous l'identifiant « ville »
+let genData = null;
+const kmTxt = r => (r < 1000 ? `${r} m` : `${String(r / 1000).replace('.', ',')} km`);
+function genInfo(D) {
+  const len = new Map();                                              // les grandes rues les plus longues, pour la ligne de route
+  for (const r of D.roads) {
+    if (!r.n || r.k !== 0) continue;
+    let L = 0;
+    for (let k = 2; k < r.p.length; k += 2) L += Math.hypot(r.p[k] - r.p[k - 2], r.p[k + 1] - r.p[k - 1]);
+    len.set(r.n, (len.get(r.n) || 0) + L);
+  }
+  const n = v => v.toLocaleString('fr-CA');
+  return {
+    eyebrow: `Départ · ${D.place.name}`,
+    route: [D.place.name, ...[...len].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([s]) => s)],
+    note: `${D.place.label} : ${kmTxt(D.place.radius)} autour du centre, carte générée à la demande (${n(D.buildings.length)} bâtiments, ${n(D.shops.length)} commerces, ${n(D.statues.length)} statues et monuments). Départ fixe : la grande rue la plus proche du centre. Données © les contributeurs d'OpenStreetMap, relief Terrain Tiles (AWS).`,
+  };
+}
+const mapName = W => (W.id === 'ville' ? W.D.place.name : { invente: 'Monde inventé', quebec: 'Vieux-Québec', plateau: 'Plateau-Mont-Royal' }[W.id]);
+const available = id => id === 'invente' || (id === 'ville' ? !!genData : !!(REAL_WORLDS[id] && REAL_WORLDS[id].data()?.roads));
 const MODE_NOTE = 'Mode Chantiers : des cônes orange, des clôtures et des barrières clignotantes partout (fonce dedans, tout ça s’envole), pelles mécaniques, bosses de terre et tremplins, et encore plus de cyclistes.';
 
 let state = 'menu';             // menu | play | won
 let gameActive = false;         // une partie est en cours (menu = pause)
 let mode = 'chantier';          // chantier (par défaut) | classique
 let elapsed = 0, collected = 0, camMode = 0;
-const recordKey = () => world.id + (world.id === 'plateau' ? '-arrondissement' : '') + (mode === 'chantier' ? '-chantier' : '');
+const recordKey = () => (world.id === 'ville' ? `ville-${world.D.place.lat.toFixed(4)},${world.D.place.lon.toFixed(4)},${world.D.place.radius}` :
+  world.id + (world.id === 'plateau' ? '-arrondissement' : '')) + (mode === 'chantier' ? '-chantier' : '');
 const bestOf = key => { const v = parseFloat(store.get('best-' + key) ?? (key === 'invente' ? store.get('best') : null)); return v > 0 ? v : null; };
 
 let toastTimer = 0;
@@ -6664,12 +6728,12 @@ function refreshMenu() {
   el.mapNote.textContent = mode === 'chantier' ? `${info.note} ${MODE_NOTE}` : info.note;
   el.count.textContent = `${world.coins.length} pièces d'or`;
   const best = bestOf(recordKey());
-  el.menuNote.textContent = best != null ? `Record sur cette carte${mode === 'chantier' ? ' en mode Chantiers' : ''} : ${fmt(best)}.` : 'Appuie sur Entrée pour démarrer.';
+  el.menuNote.textContent = `Carte actuelle : ${mapName(world)}.` + (best != null ? ` Record${mode === 'chantier' ? ' en mode Chantiers' : ''} : ${fmt(best)}.` : '');
   el.start.textContent = gameActive ? 'Reprendre' : 'Démarrer';
   el.newGame.hidden = !gameActive;
   if (!$('menu-adv').hidden && !$('garage').hidden) renderGarage();
   setText($('garage-cash'), fmtCash(cash));
-  $('map-' + world.id).checked = true;
+  document.querySelectorAll('input[name="map"]').forEach(r => { r.checked = r.value === world.id; });
   $('style-' + style).checked = true;
   $('mode-' + mode).checked = true;
   $('voice-' + (voiceOn ? 'on' : 'off')).checked = true;
@@ -6704,7 +6768,7 @@ function win() {
   el.winLede.textContent = `Les ${world.coins.length} pièces ramassées en`;
   el.winTime.textContent = fmt(elapsed);
   el.winBest.textContent = (isRecord ? 'Nouveau record !' : `Record : ${fmt(best)}`) + ` · +${bonus} $`;
-  $('win-eyebrow').textContent = ({ quebec: 'Arrivée · Vieux-Québec', plateau: 'Arrivée · Plateau-Mont-Royal' }[world.id] || 'Arrivée') + (mode === 'chantier' ? ' · Chantiers' : '');
+  $('win-eyebrow').textContent = (world.id === 'invente' ? 'Arrivée' : `Arrivée · ${mapName(world)}`) + (mode === 'chantier' ? ' · Chantiers' : '');
   el.win.hidden = false;
   refreshMenu();
   setTimeout(() => $('btn-again').focus({ preventScroll: true }), 50);
@@ -6798,7 +6862,7 @@ function teleportTo(dest) {
 function gotoPlace(mode) {
   const q = $('goto-input').value.trim(), note = $('goto-note');
   if (!q) { $('goto-input').focus(); return; }
-  if (!REAL_WORLDS[world.id]) { note.textContent = 'Les adresses fonctionnent sur les cartes réelles (Vieux-Québec, Plateau).'; return; }
+  if (!world.D) { note.textContent = 'Les adresses fonctionnent sur les cartes réelles (villes générées, Vieux-Québec, Plateau).'; return; }
   const dest = findPlace(q);
   if (!dest) { note.textContent = `Introuvable : « ${q} ». Essaie un numéro et une rue (4200 Saint-Denis) ou un lieu (Schwartz's).`; return; }
   note.textContent = `→ ${dest.label}`;
@@ -6882,14 +6946,15 @@ const worlds = {};
 const BUILD_NOTE = { invente: 'Construction du monde…', quebec: 'Construction du Vieux-Québec…', plateau: `Construction du Plateau-Mont-Royal (${(window.PLATEAU_MONT_ROYAL?.buildings?.length || 0).toLocaleString('fr-CA')} bâtiments)…` };
 async function selectWorld(id) {
   if (!available(id)) id = 'invente';
-  if (world && world.id === id) return;
+  if (world && world.id === id && worlds[id] === world) return;
   if (!worlds[id]) {
     el.start.disabled = true;
-    el.menuNote.textContent = BUILD_NOTE[id];
-    if (document.fonts && document.fonts.load) await Promise.race([document.fonts.load(SIGN_FONT).catch(() => {}), new Promise(r => setTimeout(r, 2500))]);
-    await new Promise(r => requestAnimationFrame(() => setTimeout(r, 30)));
-    worlds[id] = id === 'invente' ? buildInventedWorld() : buildRealWorld(id, REAL_WORLDS[id].data(), REAL_WORLDS[id].city);
-    el.start.disabled = false;
+    el.menuNote.textContent = id === 'ville' ? `Construction de ${genData.place.name} (${genData.buildings.length.toLocaleString('fr-CA')} bâtiments)…` : BUILD_NOTE[id];
+    try {
+      if (document.fonts && document.fonts.load) await Promise.race([document.fonts.load(SIGN_FONT).catch(() => {}), new Promise(r => setTimeout(r, 2500))]);
+      await new Promise(r => requestAnimationFrame(() => setTimeout(r, 30)));
+      worlds[id] = id === 'invente' ? buildInventedWorld() : id === 'ville' ? buildRealWorld(id, genData, 'ville') : buildRealWorld(id, REAL_WORLDS[id].data(), REAL_WORLDS[id].city);
+    } finally { el.start.disabled = false; }
   }
   if (world) scene.remove(world.group);
   world = worlds[id];
@@ -6906,6 +6971,126 @@ async function selectWorld(id) {
   refreshMenu();
 }
 
+// ---------- Générateur de ville : la carte de n'importe quel endroit, téléchargée et construite à la demande ----------
+// (city-gen.js). Si ça ne répond pas, on se rabat sur le Plateau-Mont-Royal.
+const RADII = [500, 1000, 1500, 2000];
+let genRadius = RADII.includes(+store.get('gen-radius')) ? +store.get('gen-radius') : 1000;
+let genAbort = null;                                                  // génération en cours (pour l'annuler)
+const genKey = (q, r) => `${normTxt(q)}|${r}`;
+const setGenNote = msg => { $('gen-note').textContent = msg; };
+// Les 8 dernières cartes générées restent dans IndexedDB : on les retrouve sans retélécharger
+const genCache = {
+  db: null,
+  open() {
+    return (this.db ||= new Promise((ok, ko) => {
+      const rq = indexedDB.open('minidrive-villes', 1);
+      rq.onupgradeneeded = () => rq.result.createObjectStore('cartes');
+      rq.onsuccess = () => ok(rq.result);
+      rq.onerror = () => ko(rq.error);
+    }));
+  },
+  async run(mode, fn) {
+    const db = await this.open();
+    return new Promise((ok, ko) => {
+      const tx = db.transaction('cartes', mode), rq = fn(tx.objectStore('cartes'));
+      tx.oncomplete = () => ok(rq && rq.result);
+      tx.onerror = tx.onabort = () => ko(tx.error);
+    });
+  },
+  async get(k) { try { return (await this.run('readonly', st => st.get(k))) || null; } catch (e) { return null; } },
+  async put(k, D) {
+    try {
+      let keys = [];
+      try { keys = JSON.parse(store.get('gen-keys') || '[]'); } catch (e) { /* liste abîmée : on repart de zéro */ }
+      keys = [k, ...keys.filter(x => x !== k)];
+      const old = keys.splice(8);
+      await this.run('readwrite', st => { st.put(D, k); for (const o of old) st.delete(o); });
+      store.set('gen-keys', JSON.stringify(keys));
+    } catch (e) { /* stockage indisponible : on retéléchargera */ }
+  },
+};
+function setGenBusy(on) {
+  for (const e of [$('gen-city'), $('btn-gen'), ...document.querySelectorAll('input[name="radius"]')]) e.disabled = on;
+  $('btn-gen').textContent = on ? 'Génération…' : 'Générer la carte';
+  $('btn-gen-stop').hidden = !on;
+  el.start.disabled = el.newGame.disabled = on;
+}
+// Libère une carte générée remplacée par une autre : ses géométries, et les matériaux et textures qui ne servent plus ailleurs
+function disposeWorld(W) {
+  const objs = new Set(), mats = new Set(), keep = new Set(), keepGeo = new Set();
+  const matsOf = (o, into) => { if (o.material) for (const m of [].concat(o.material)) into.add(m); };
+  for (const g of [W.group, W.site && W.site.group]) if (g) g.traverse(o => { objs.add(o); matsOf(o, mats); });
+  for (const e of styled) {
+    if (objs.has(e.obj)) { mats.add(e.normal); mats.add(e.retro); } else { keep.add(e.normal); keep.add(e.retro); }
+  }
+  const kept = o => { matsOf(o, keep); if (o.geometry) keepGeo.add(o.geometry); };
+  scene.traverse(kept);
+  for (const w of Object.values(worlds)) if (w !== W) w.group.traverse(kept);
+  const keepTex = new Set();
+  for (const m of keep) for (const v of Object.values(m)) if (v && v.isTexture) keepTex.add(v);
+  for (const o of objs) if (o.geometry && !keepGeo.has(o.geometry)) o.geometry.dispose();
+  for (const m of mats) {
+    if (keep.has(m)) continue;
+    for (const v of Object.values(m)) if (v && v.isTexture && !keepTex.has(v)) v.dispose();
+    m.dispose();
+  }
+  for (const list of [styled, retroOnly, normalOnly]) {
+    let j = 0;
+    for (const it of list) if (!objs.has(it.obj || it)) list[j++] = it;
+    list.length = j;
+  }
+}
+async function generateCity() {
+  const input = $('gen-city'), q = input.value.trim();
+  if (genAbort) return;
+  if (!q) { setGenNote('Tape le nom d\'une ville, d\'un quartier ou une adresse.'); input.focus(); return; }
+  initAudio();
+  store.set('gen-city', q);
+  const key = genKey(q, genRadius), prev = worlds.ville, ac = new AbortController();
+  genAbort = ac;
+  setGenBusy(true);
+  try {
+    let D = await genCache.get(key);
+    if (!D) {
+      D = await CityGen.generate(q, genRadius, { status: setGenNote, signal: ac.signal });
+      await genCache.put(key, D);
+    }
+    if (ac.signal.aborted) throw new DOMException('Génération annulée', 'AbortError');
+    setGenNote(`${D.place.label} : construction en 3D…`);
+    delete worlds.ville;
+    genData = D;
+    WORLD_INFO.ville = genInfo(D);
+    await selectWorld('ville');
+    store.set('gen-last', key);
+    setGenNote(`${D.place.label} (${kmTxt(D.place.radius)} autour) : ${D.buildings.length.toLocaleString('fr-CA')} bâtiments, ${world.coins.length} pièces d'or.`);
+    play();
+    toast(`${D.place.name} · ${world.coins.length} pièces d'or`, 2200);
+  } catch (e) {
+    if (e.name === 'AbortError') setGenNote('Génération annulée.');
+    else if (e.notFound) { setGenNote(`${e.message.charAt(0).toUpperCase()}${e.message.slice(1)}. Essaie un autre nom : une ville, un quartier ou une adresse.`); input.focus(); }
+    else {
+      console.warn(e);
+      setGenNote(`Impossible de générer « ${q} » : ${e.message}. Tu roules sur le Plateau-Mont-Royal en attendant.`);
+      if (world.id !== 'plateau' && available('plateau')) await selectWorld('plateau');
+    }
+  } finally {
+    genAbort = null;
+    setGenBusy(false);
+    if (prev && prev !== world && prev !== worlds.ville) disposeWorld(prev);
+  }
+}
+// au démarrage : la dernière carte générée, depuis IndexedDB
+async function restoreGenerated() {
+  const key = store.get('gen-last'), D = key ? await genCache.get(key) : null;
+  if (!D) return false;
+  genData = D;
+  WORLD_INFO.ville = genInfo(D);
+  return true;
+}
+$('gen-city').value = store.get('gen-city') || '';
+$('radius-' + genRadius).checked = true;
+document.querySelectorAll('input[name="radius"]').forEach(r => r.addEventListener('change', () => { genRadius = +r.value; store.set('gen-radius', r.value); }));
+
 // ---------- Clavier, boutons, tactile ----------
 addEventListener('keydown', e => {
   initAudio();
@@ -6913,6 +7098,11 @@ addEventListener('keydown', e => {
   if (e.target && e.target.id === 'goto-input') {                    // on tape une adresse
     if (e.code === 'Enter') { e.preventDefault(); gotoPlace('nav'); }
     else if (e.code === 'Escape') showMain();
+    return;
+  }
+  if (e.target && e.target.id === 'gen-city') {                      // on tape une ville
+    if (e.code === 'Enter') { e.preventDefault(); generateCity(); }
+    else if (e.code === 'Escape' && gameActive) play();
     return;
   }
   if (state === 'menu') {
@@ -6974,6 +7164,8 @@ document.querySelectorAll('input[name="style"]').forEach(r => r.addEventListener
 document.querySelectorAll('input[name="mode"]').forEach(r => r.addEventListener('change', () => setMode(r.value)));
 document.querySelectorAll('input[name="voice"]').forEach(r => r.addEventListener('change', () => setVoice(r.value === 'on')));
 document.querySelectorAll('input[name="start"]').forEach(r => r.addEventListener('change', () => { startMode = r.value; store.set('start', r.value); refreshMenu(); }));
+onButton('btn-gen', generateCity);
+onButton('btn-gen-stop', () => { if (genAbort) genAbort.abort(); });
 onButton('goto-nav', () => gotoPlace('nav'));
 onButton('goto-tp', () => gotoPlace('tp'));
 onButton('btn-goto', () => { openMenu(); showAdv('partie'); setTimeout(() => $('goto-input').focus(), 60); });
@@ -7232,7 +7424,7 @@ const tokensOf = s => normTxt(s).split(' ').filter(Boolean).map(t => (t === 'st'
 const lowerFirst = n => (/^(Rue|Avenue|Boulevard|Côte|Chemin|Place|Terrasse|Montée|Allée|Carré|Parc)\s/.test(n) ? n.charAt(0).toLowerCase() + n.slice(1) : n);
 function placeIndex(W) {
   if (W.places) return W.places;
-  const D = REAL_WORLDS[W.id] && REAL_WORLDS[W.id].data(), P = [];
+  const D = W.D, P = [];
   const add = (n, kind, x, z) => { if (n) P.push({ n, kind, x, z, tok: tokensOf(n) }); };
   const centroidOf = flat => { let x = 0, z = 0; for (let k = 0; k < flat.length; k += 2) { x += flat[k]; z += flat[k + 1]; } return [x / (flat.length / 2), z / (flat.length / 2)]; };
   if (D) {
@@ -7255,7 +7447,7 @@ function placeIndex(W) {
   return P;
 }
 function findPlace(q) {
-  const W = world, D = REAL_WORLDS[W.id] && REAL_WORLDS[W.id].data();
+  const W = world, D = W.D;
   if (!D) return null;
   placeIndex(W);
   const m = /^\s*(\d+)(?:\s?[a-z](?=[\s,-]))?\s*[,-]?\s*(.+)$/i.exec(q);   // « 4200 », « 4200a », « 4200, »
@@ -7291,7 +7483,7 @@ function findPlace(q) {
 function fillPlaceList() {
   const dl = $('goto-list');
   dl.innerHTML = '';
-  if (!REAL_WORLDS[world.id]) return;
+  if (!world.D) return;
   const names = new Set();
   for (const p of placeIndex(world)) if (p.kind !== 'bâtiment' || names.size < 3000) names.add(p.n);
   const frag = document.createDocumentFragment();
@@ -7516,7 +7708,9 @@ if (hot && typeof hot.snapshot === 'function') {
 async function boot(data) {
   if (data && data.style) style = data.style;
   if (data && data.mode) mode = data.mode;
-  await selectWorld((data && data.world) || initialWorld);
+  let first = (data && data.world) || initialWorld;
+  if (first === 'ville' && !(await restoreGenerated())) first = 'plateau';   // carte générée introuvable : le Plateau
+  await selectWorld(first);
   if (data && Array.isArray(data.taken) && data.taken.length === world.coins.length) {
     data.taken.forEach((tk, i) => { if (tk) takeCoin(world.coins[i], true); });
     elapsed = data.elapsed || 0;
@@ -7524,6 +7718,7 @@ async function boot(data) {
     if (data.state === 'play') play();
     else if (data.gameActive) { gameActive = true; refreshMenu(); }
   } else if (hash.includes('jouer')) play();   // lien direct : #plateau-jouer
+  if (!isTouch && state === 'menu' && !gameActive) setTimeout(() => $('gen-city').focus({ preventScroll: true }), 60);   // on commence par choisir une ville
   requestAnimationFrame(frame);
 }
 if (hot && typeof hot.ready === 'function') hot.ready(boot);
