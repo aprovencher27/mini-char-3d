@@ -750,6 +750,8 @@ function segIntersect(ax, az, bx, bz, cx, cz, dx, dz) {
   const t = ((cx - ax) * sz - (cz - az) * sx) / den, u = ((cx - ax) * rz - (cz - az) * rx) / den;
   return t >= 0 && t <= 1 && u >= 0 && u <= 1 ? [ax + rx * t, az + rz * t] : null;
 }
+// segment qui ne bloque qu'entre les hauteurs y0 et y1 (glissière d'un pont, pile, mur de rampe)
+function addSegY(grid, ax, az, bx, bz, r, y0, y1) { const it = addSeg(grid, ax, az, bx, bz, r); it.y0 = y0; it.y1 = y1; return it; }
 function addRoadSeg(grid, s) {
   const m = s.w / 2 + 3;
   grid.add(s, Math.min(s.ax, s.bx) - m, Math.min(s.az, s.bz) - m, Math.max(s.ax, s.bx) + m, Math.max(s.az, s.bz) + m);
@@ -973,7 +975,8 @@ const FACADE_DEFS = [
 ];
 const FAC = { brickRed: 0, brickBrown: 1, brickBeige: 2, greystone: 3, stoneQc: 4, stucco: 5, painted: 6, glass: 7 };
 const M_SHOP = 8, M_DOOR = 9, M_ROOF_FLAT = 10, M_ROOF_METAL = 11, M_TRIM = 12, M_RAIL = 13, M_STONE = 14;
-const M_CHURCH = 15, M_TOWER = 16, M_SCHOOL_R = 17, M_SCHOOL_B = 18, M_DECAL = 19, N_CITY_MATS = 20;   // églises, clochers, écoles, détails (rosace, portails, drapeau)
+const M_CHURCH = 15, M_TOWER = 16, M_SCHOOL_R = 17, M_SCHOOL_B = 18, M_DECAL = 19;   // églises, clochers, écoles, détails (rosace, portails, drapeau)
+const M_SIDING = 20, M_HBRICK = 21, M_HWIN = 22, M_GARAGE = 23, M_SHINGLE = 24, N_CITY_MATS = 25;   // maisons de banlieue
 const BAY = 3.2;
 const FACADE_AVG = FACADE_DEFS.map(d => new THREE.Color().setRGB(d.base[0] / 255, d.base[1] / 255, d.base[2] / 255, THREE.SRGBColorSpace));
 const jitter = (rgb, amt) => { const d = (Math.random() * 2 - 1) * amt; return `rgb(${clamp(rgb[0] + d, 0, 255) | 0},${clamp(rgb[1] + d * 0.9, 0, 255) | 0},${clamp(rgb[2] + d * 0.8, 0, 255) | 0})`; };
@@ -1220,6 +1223,54 @@ const roofMetalTex = makeTexture(128, (g, S) => {
 });
 const roofFlatTex = makeTexture(128, (g, S) => { g.fillStyle = '#a3a29d'; g.fillRect(0, 0, S, S); speckle(g, S, 120, 60, 2500); });
 const trimTex = makeTexture(128, (g, S) => { g.fillStyle = '#f2f2f0'; g.fillRect(0, 0, S, S); noise(g, S, S, 2500, 0.05); });
+// ---------- Maisons de banlieue : déclin de vinyle, brique, fenêtre, porte de garage, bardeaux d'asphalte (une texture = 2 m) ----------
+const sidingTex = makeTexture(256, (g, S) => {                         // dix planches de déclin, teintées par maison
+  g.fillStyle = '#f3f2ee'; g.fillRect(0, 0, S, S);
+  noise(g, S, S, 1800, 0.03);
+  const h = S / 10;
+  for (let k = 0; k < 10; k++) {
+    const grad = g.createLinearGradient(0, k * h, 0, (k + 1) * h);
+    grad.addColorStop(0, 'rgba(255,255,255,0.18)'); grad.addColorStop(0.8, 'rgba(0,0,0,0.03)'); grad.addColorStop(1, 'rgba(0,0,0,0.2)');
+    g.fillStyle = grad; g.fillRect(0, k * h, S, h);
+  }
+});
+const houseBrickTex = makeTexture(256, (g, S) => {                     // brique pâle (teintée par maison), joints clairs
+  g.fillStyle = '#ebe8e2'; g.fillRect(0, 0, S, S);
+  const bh = S / 30, bw = S / 10;
+  for (let r = 0; r < 30; r++) for (let c = -1; c <= 10; c++) {
+    const v = 196 + Math.random() * 44 | 0;
+    g.fillStyle = `rgb(${v},${v - 4},${v - 8})`;
+    g.fillRect(c * bw + (r % 2) * bw / 2 + 1, r * bh + 1, bw - 2, bh - 1.6);
+  }
+});
+const houseWinTex = makeTexture(128, (g, S) => {                       // fenêtre coulissante : cadre blanc, rideaux, reflet
+  g.fillStyle = '#f6f5f1'; g.fillRect(0, 0, S, S);
+  const grad = g.createLinearGradient(0, 0, S, S);
+  grad.addColorStop(0, '#7f93a6'); grad.addColorStop(0.5, '#3a4a58'); grad.addColorStop(1, '#52677a');
+  g.fillStyle = grad; g.fillRect(10, 10, S - 20, S - 20);
+  g.fillStyle = 'rgba(236,228,210,0.85)'; g.fillRect(10, 10, 18, S - 20); g.fillRect(S - 28, 10, 18, S - 20);
+  g.fillStyle = '#f6f5f1'; g.fillRect(S / 2 - 3, 10, 6, S - 20);
+  g.fillStyle = 'rgba(255,255,255,0.12)'; g.beginPath(); g.moveTo(30, S * 0.65); g.lineTo(S * 0.55, 12); g.lineTo(S * 0.72, 12); g.lineTo(30, S * 0.9); g.fill();
+});
+const garageTex = makeTexture(128, (g, S) => {                         // porte de garage sectionnelle : quatre panneaux à caissons
+  g.fillStyle = '#efeee9'; g.fillRect(0, 0, S, S);
+  for (let r = 0; r < 4; r++) {
+    const y = r * S / 4;
+    g.fillStyle = 'rgba(0,0,0,0.22)'; g.fillRect(0, y, S, 2);
+    g.strokeStyle = 'rgba(0,0,0,0.13)'; g.lineWidth = 2;
+    for (let c = 0; c < 4; c++) g.strokeRect(c * S / 4 + 5, y + 6, S / 4 - 10, S / 4 - 12);
+  }
+});
+const shingleTex = makeTexture(256, (g, S) => {                        // bardeaux : rangs de languettes décalées
+  g.fillStyle = '#8f8f8f'; g.fillRect(0, 0, S, S);
+  const rows = 14, h = S / rows, w = S / 6;
+  for (let r = 0; r < rows; r++) for (let c = -1; c <= 6; c++) {
+    const v = 120 + Math.random() * 50 | 0;
+    g.fillStyle = `rgb(${v},${v},${v})`;
+    g.fillRect(c * w + (r % 2) * w / 2 + 1, r * h, w - 2, h - 2);
+  }
+  speckle(g, S, 140, 60, 4000);
+});
 
 // ---------- Pistes cyclables (le long de la texture = sens de la piste) ----------
 function drawBike(g, x, y, s, col, facing) {
@@ -1357,6 +1408,7 @@ const MAT = {
   bikeLane: { normal: new THREE.MeshStandardMaterial({ map: bikeLaneTex, roughness: 0.85, ...offset(-7) }), retro: basic(0xffffff, { map: retroBikeTex, ...offset(-7) }) },
   pad: new THREE.MeshStandardMaterial({ color: 0xbcb6aa, roughness: 0.95, ...offset(-1) }),
   stone: { normal: new THREE.MeshStandardMaterial({ map: stoneTex, roughness: 0.95, side: THREE.DoubleSide }), retro: basic(0x120624, { side: THREE.DoubleSide }) },
+  concrete: { normal: new THREE.MeshStandardMaterial({ map: trimTex, vertexColors: true, roughness: 0.9 }), retro: basic(0x1a0b30) },   // ponts, viaducs
   water: {
     normal: new THREE.MeshStandardMaterial({ color: 0x2a7fc4, roughness: 0.08, metalness: 0.05, transparent: true, opacity: 0.84 }),
     retro: basic(hdr(0.01, 0.02, 0.09), { transparent: true, opacity: 0.8 }),
@@ -1377,6 +1429,7 @@ const MAT = {
 // Matériaux des bâtiments (un groupe par matériau dans chaque tuile de ville)
 const retroWall = basic(hdr(0.75, 0.75, 0.75), { map: retroWindowTex });
 const retroRoof = basic(0x0d0520, { side: THREE.DoubleSide });
+const retroHouse = basic(0x160a2c);                                  // murs de maison : sombres, fenêtres néon à part
 const CITY_MATS = {
   normal: [
     ...facadeTex.map((map, i) => new THREE.MeshStandardMaterial({ map, vertexColors: true, roughness: i === FAC.glass ? 0.12 : 0.92, metalness: i === FAC.glass ? 0.35 : 0 })),
@@ -1392,6 +1445,11 @@ const CITY_MATS = {
     new THREE.MeshStandardMaterial({ map: schoolRedTex, vertexColors: true, roughness: 0.9 }),
     new THREE.MeshStandardMaterial({ map: schoolBeigeTex, vertexColors: true, roughness: 0.9 }),
     new THREE.MeshStandardMaterial({ map: decalTex, vertexColors: true, alphaTest: 0.5, side: THREE.DoubleSide, roughness: 0.6 }),
+    new THREE.MeshStandardMaterial({ map: sidingTex, vertexColors: true, roughness: 0.75 }),
+    new THREE.MeshStandardMaterial({ map: houseBrickTex, vertexColors: true, roughness: 0.92 }),
+    new THREE.MeshStandardMaterial({ map: houseWinTex, vertexColors: true, roughness: 0.25, metalness: 0.15 }),
+    new THREE.MeshStandardMaterial({ map: garageTex, vertexColors: true, roughness: 0.6 }),
+    new THREE.MeshStandardMaterial({ map: shingleTex, vertexColors: true, roughness: 0.95, side: THREE.DoubleSide }),
   ],
   retro: [
     ...facadeTex.map(() => retroWall),
@@ -1403,6 +1461,7 @@ const CITY_MATS = {
     basic(0x120624),
     retroWall, retroWall, retroWall, retroWall,
     basic(hdr(1.8, 0.9, 2.1), { map: decalTex, alphaTest: 0.5, side: THREE.DoubleSide }),
+    retroHouse, retroHouse, basic(hdr(0.3, 1.5, 2.2)), basic(0xffffff, { map: retroDoorTex }), retroRoof,
   ],
 };
 const COIN_MATS = {
@@ -1612,6 +1671,108 @@ function ribbonInto(A, points, width, lift, heightAt, uLen) {
   for (let i = 0; i < n - 1; i++) { const k = base + i * 2; A.idx.push(k, k + 1, k + 2, k + 1, k + 3, k + 2); }
 }
 
+// Points tous les « step » m d'une route surélevée, avec sa hauteur au-dessus du sol interpolée : [x, z, e]
+function densifyE(pts, es, step) {
+  const out = [[pts[0][0], pts[0][1], es[0]]];
+  for (let i = 1; i < pts.length; i++) {
+    const [ax, az] = pts[i - 1], [bx, bz] = pts[i], n = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / step));
+    for (let k = 1; k <= n; k++) out.push([lerp(ax, bx, k / n), lerp(az, bz, k / n), lerp(es[i - 1], es[i], k / n)]);
+  }
+  return out;
+}
+// Ruban d'une route surélevée : sol sous l'axe + e, à plat d'un bord à l'autre
+function deckRibbon(A, points, width, lift, heightAt, uLen) {
+  const base = A.pos.length / 3, n = points.length;
+  let dist = 0;
+  for (let i = 0; i < n; i++) {
+    const p = points[i], a = points[Math.max(0, i - 1)], b = points[Math.min(n - 1, i + 1)];
+    let tx = b[0] - a[0], tz = b[1] - a[1];
+    const tl = Math.hypot(tx, tz) || 1; tx /= tl; tz /= tl;
+    if (i > 0) dist += Math.hypot(p[0] - points[i - 1][0], p[1] - points[i - 1][1]);
+    const y = heightAt(p[0], p[1]) + p[2] + lift;
+    for (const s of [-1, 1]) { A.pos.push(p[0] - tz * s * width / 2, y, p[1] + tx * s * width / 2); A.uv.push(dist / uLen, s < 0 ? 0 : 1); }
+  }
+  for (let i = 0; i < n - 1; i++) { const k = base + i * 2; A.idx.push(k, k + 1, k + 2, k + 1, k + 3, k + 2); }
+}
+// Ponts, viaducs et rampes d'échangeur (cartes générées) : dalle de béton (vide dessous et piliers pour un pont,
+// mur jusqu'au sol pour une rampe), glissières de béton. W.deckAt(x, z, y) : la chaussée surélevée sous (x, z),
+// pour un véhicule à la hauteur y (un pont n'existe pas pour qui roule dessous)
+function addOverpasses(W, D) {
+  const T = W.terrain, CON = acc(), light = gray(0.82), dark = gray(0.62);
+  W.deckGrid = new Grid(24);
+  const ends = new Map(), endKey = (x, z) => `${Math.round(x * 2)},${Math.round(z * 2)}`;   // bouts partagés par deux routes surélevées
+  for (const r of D.roads) if (r.e) for (const k of [0, r.p.length - 2]) { const key = endKey(r.p[k], r.p[k + 1]); ends.set(key, (ends.get(key) || 0) + 1); }
+  D.roads.forEach((r, ri) => {
+    if (!r.e) return;
+    const P = densifyE(ringOf(r.p), r.e, 3), hw = r.w / 2;
+    // culée : un bout en hauteur que rien ne prolonge (coupé au bord du décor) est fermé par un mur
+    for (const [k, k2] of [[0, 1], [P.length - 1, P.length - 2]]) {
+      const [x, z, e] = P[k], [x2, z2] = P[k2], L = Math.hypot(x2 - x, z2 - z) || 1;
+      if (e < 0.5 || ends.get(endKey(x, z)) > 1) continue;
+      const vx = -(z2 - z) / L * hw, vz = (x2 - x) / L * hw, y = T(x, z) + e + 0.12;
+      quad(CON, x - vx, T(x - vx, z - vz) - 0.5, z - vz, x + vx, T(x + vx, z + vz) - 0.5, z + vz, x + vx, y, z + vz, x - vx, y, z - vz, (x - x2) / L, 0, (z - z2) / L, dark, 0, 0, hw / 2, y / 4);
+    }
+    let sincePier = 12;
+    for (let k = 0; k < P.length - 1; k++) {
+      const [ax, az, ea] = P[k], [bx, bz, eb] = P[k + 1], L = Math.hypot(bx - ax, bz - az);
+      if (L < 0.01) continue;
+      W.deckGrid.add({ ax, az, bx, bz, ea, eb, hw, r: ri }, Math.min(ax, bx) - hw - 2.5, Math.min(az, bz) - hw - 2.5, Math.max(ax, bx) + hw + 2.5, Math.max(az, bz) + hw + 2.5);
+      if (ea < 0.15 && eb < 0.15) continue;                               // au ras du sol : rien à construire
+      const ux = (bx - ax) / L, uz = (bz - az) / L, nx = -uz, nz = ux;
+      const ya = T(ax, az) + ea + 0.12, yb = T(bx, bz) + eb + 0.12;           // dessus de la chaussée
+      for (const sg of [-1, 1]) {
+        const ox = nx * hw * sg, oz = nz * hw * sg;
+        // le côté : l'épaisseur de la dalle (pont), ou un mur jusqu'au sol (rampe)
+        const ga = r.b ? ya - 1.2 : Math.min(ya - 0.3, T(ax + ox, az + oz) - 0.4), gb = r.b ? yb - 1.2 : Math.min(yb - 0.3, T(bx + ox, bz + oz) - 0.4);
+        quad(CON, ax + ox, ga, az + oz, bx + ox, gb, bz + oz, bx + ox, yb, bz + oz, ax + ox, ya, az + oz, nx * sg, 0, nz * sg, r.b ? light : dark, 0, ga / 4, L / 4, ya / 4);
+        if (Math.max(ea, eb) > 1) {                                        // glissière de béton : on ne tombe pas
+          const gx = ox * 0.94, gz = oz * 0.94;
+          slab(CON, [ax + gx, ya + 0.4, az + gz], [bx + gx, yb + 0.4, bz + gz], 0.35, 0.8, light);
+          addSegY(W.grid, ax + gx, az + gz, bx + gx, bz + gz, 0.18, Math.min(ya, yb) - 0.5, Math.max(ya, yb) + 0.9);
+        }
+        if (!r.b && Math.max(ea, eb) > 1.2) addSegY(W.grid, ax + ox, az + oz, bx + ox, bz + oz, 0, -Infinity, Math.min(ya, yb) - 0.7);   // mur de rampe, pour qui est au sol
+      }
+      if (!r.b) continue;
+      quad(CON, ax - nx * hw, ya - 1.2, az - nz * hw, bx - nx * hw, yb - 1.2, bz - nz * hw, bx + nx * hw, yb - 1.2, bz + nz * hw, ax + nx * hw, ya - 1.2, az + nz * hw, 0, -1, 0, dark);   // dessous du tablier
+      sincePier += L;
+      if (sincePier >= 24 && Math.min(ea, eb) > 3) {                        // une pile tous les ~24 m : chevêtre sur deux colonnes
+        sincePier = 0;
+        const g = T(ax, az), top = ya - 1.2;
+        obox(CON, ax, az, nx, nz, hw * 0.75, 0.55, top - 0.8, top, light);
+        for (const s2 of [-1, 1]) {
+          const px = ax + nx * hw * 0.45 * s2, pz = az + nz * hw * 0.45 * s2;
+          obox(CON, px, pz, ux, uz, 0.55, 0.55, g - 0.5, top - 0.8, light);
+          addSegY(W.grid, px - ux * 0.3, pz - uz * 0.3, px + ux * 0.3, pz + uz * 0.3, 0.45, -Infinity, top - 1);
+        }
+      }
+    }
+  });
+  if (CON.pos.length) addMesh(W, accGeometry(CON), MAT.concrete, true);
+  // sans marche nulle part (la physique ferait décoller le char) : au ras du sol au pied des rampes, et le bord d'une
+  // rampe basse descend en talus ; plus haut, un mur ou une glissière arrête le char
+  // Pour chaque route, seulement son segment le plus proche (dans une pente, le segment suivant, plus haut, « déborderait »
+  // sur nous) ; entre routes superposées, la plus haute qui est sous nous.
+  const nearest = new Map();
+  W.deckAt = (x, z, y) => {
+    nearest.clear();
+    for (const s of W.deckGrid.at(x, z)) {
+      const dx = s.bx - s.ax, dz = s.bz - s.az, t = clamp(((x - s.ax) * dx + (z - s.az) * dz) / (dx * dx + dz * dz || 1e-9), 0, 1);
+      const d = Math.hypot(x - s.ax - dx * t, z - s.az - dz * t), m = nearest.get(s.r);
+      if (!m || d < m.d) nearest.set(s.r, { s, d, t });
+    }
+    let best = -Infinity;
+    for (const { s, d, t } of nearest.values()) {
+      let e = s.ea + (s.eb - s.ea) * t;
+      if (d > s.hw) {
+        if (d > s.hw + 2.4 || e > 1.2) continue;
+        e *= 1 - (d - s.hw) / 2.4;
+      }
+      const h = T(x, z) + e;
+      if (h > best && y >= h - 2.5) best = h;                              // plus de 2,5 m au-dessus de nous : on est dessous
+    }
+    return best;
+  };
+}
 // fine : rectangles [x0, x1, z0, z1] où le sol est remaillé au mètre (piscines : talus et buttes que la grille grossière raterait)
 function addTerrainMesh(W, cx, cz, sx, sz, cell, colorAt, fine = []) {
   const nx = Math.round(sx / cell), nz = Math.round(sz / cell);
@@ -1720,9 +1881,15 @@ const CITY_STYLES = {
     trims: [0xe9e5dc, 0x2b2320, 0x3b4148, 0x2d4a3d, 0x5a2e25].map(col3),
     metalRoofs: [[col3(0x4a4f55), 0.4], [col3(0x6b5d52), 0.25], [col3(0x7d858c), 0.2], [COPPER, 0.15]],
     hip: true, pitch: 0.9, parapet: 0.6, cornice: 0.3,
-    balconies: 0.3, stairs: 0, shopsOn: [0], shopChance: 0.6, doorSpacing: 6, dormers: false, chimneys: true, ac: 0.4,
+    balconies: 0.3, stairs: 0, shopsOn: [0], shopChance: 0, doorSpacing: 6, dormers: false, chimneys: true, ac: 0.4, hipDetached: true,
   },
 };
+// maisons de banlieue (voir CityBatch.house) : déclin, brique, bardeaux, portes de garage, volets
+const HOUSE_SIDINGS = [0xf3f1ea, 0xe6dcc6, 0xd3d5d0, 0xe9dfb2, 0xbcc6ad, 0xc0cfdb, 0x9aa8b3, 0xb6a891, 0xdcd0b8].map(col3);
+const HOUSE_BRICKS = [0xb0604c, 0x8f5d4a, 0xe0c69e, 0xbdb4a8, 0xc4704f, 0xa07e6a, 0x9a4d3d].map(col3);
+const HOUSE_ROOFS = [0x3c3e41, 0x2c2d2f, 0x57524b, 0x6e7275, 0x4c4038, 0x60584f].map(col3);
+const GARAGE_COLS = [0xffffff, 0xffffff, 0xf2ead8, 0xd9d5cc, 0x6b4a33].map(col3);
+const SHUTTER_COLS = [0x1f2a24, 0x2b2f35, 0x5a2a24, 0x2f3f52].map(col3);
 
 class CityBatch {
   constructor(W, S, roads) { this.W = W; this.S = S; this.roads = roads; this.tiles = new Map(); this.signs = new SignBatch(); }
@@ -1823,12 +1990,17 @@ class CityBatch {
     const tall = b.h > 32 && kind !== 'c' && !chateau && !price;
     const box = obb(ring);
     const fill = -ringArea(ring) / (4 * box.ha * box.hb);
+    if (kind === 'h' && fill > 0.6) { this.house(ring, b, idx, A, E, gMin, gMax, box, fill); return; }   // maison de banlieue
     const fac = tall ? FAC.glass : chateau ? FAC.brickBrown : price || (mansard && !church) ? FAC.greystone : church ? M_CHURCH :
       school ? (h1(1) < 0.62 ? M_SCHOOL_R : M_SCHOOL_B) : arena ? (h1(1) < 0.5 ? M_SCHOOL_B : FAC.brickBrown) : pickW(S.facades, h1(1));
     const wallCol = fac === FAC.painted ? pick(S.paints, h1(2)) : church || school ? gray(0.93 + h1(2) * 0.1) : gray(0.87 + h1(2) * 0.16);
     const blankCol = FACADE_AVG[fac].clone().multiply(wallCol).multiplyScalar(0.95);
     const trimCol = pick(S.trims, h1(3));
-    const hip = !tall && !mansard && !church && !arena && ((S.hip && fill > 0.78 && -ringArea(ring) < 1600 && b.h < 30) || price);
+    const detached = () => ring.every(([x0, z0], i) => {               // aucun mur mitoyen
+      const [x1, z1] = ring[(i + 1) % n], L = Math.hypot(x1 - x0, z1 - z0) || 1;
+      return L >= 60 || !this.insideOther((x0 + x1) / 2 - (z1 - z0) / L * 0.8, (z0 + z1) / 2 + (x1 - x0) / L * 0.8, idx);
+    });
+    const hip = !tall && !mansard && !church && !arena && ((S.hip && fill > 0.78 && -ringArea(ring) < 1600 && b.h < 30 && (!S.hipDetached || detached())) || price);
     const naveHw = church ? (fill > 0.7 ? box.hb : clamp(-ringArea(ring) / (4 * box.ha), 3, box.hb)) : 0;   // demi-largeur de la nef
     const R = church ? clamp(naveHw * 1.15, 3, 13) : hip ? (price ? clamp(box.hb * 1.25, 6, 14) : clamp(box.hb * S.pitch, 2, 11)) : 0;
     const mh = chateau ? 9 : mansard ? clamp(b.h * 0.25, 3.5, 7) : 0;          // hauteur de la mansarde
@@ -1949,6 +2121,133 @@ class CityBatch {
       }
     }
     if (church) this.steeple(A, E, box, base, gMin, wallTop + R, wallCol, roofTint || (h1(9) < 0.5 ? SILVER : COPPER), naveHw);
+  }
+  // ---------- Maison de banlieue (cartes générées) : bungalow ou cottage, brique ou déclin de vinyle sur fondation de béton,
+  // toit de bardeaux en pente douce (pignons ou croupe), porte et perron, fenêtres, garage et entrée asphaltée ----------
+  house(ring, b, idx, A, E, gMin, gMax, box, fill) {
+    const W = this.W, T = W.terrain, n = ring.length, h1 = s => hash01(idx * 131 + s);
+    const levels = clamp(b.l || 1, 1, 3), F = 2.7, floor0 = gMax + 0.45, wallTop = floor0 + levels * F, base = gMin - 1.2;
+    const c1 = h1(1), allBrick = c1 < 0.42, brickLow = !allBrick && levels > 1 && c1 < 0.72;   // brique, brique au rez-de-chaussée, ou déclin
+    const brickCol = pick(HOUSE_BRICKS, h1(3)), sidingCol = pick(HOUSE_SIDINGS, h1(4)), FOUND = gray(0.62), TRIM = gray(0.97);
+    const skin = f => (allBrick || (brickLow && f === 0) ? [M_HBRICK, brickCol] : [M_SIDING, sidingCol]);
+    const shutters = h1(9) < 0.3 ? pick(SHUTTER_COLS, h1(12)) : null;
+    const dw = b.dw, gar = !!(dw && b.gar);
+    // façade sur rue : celle qui regarde l'entrée asphaltée (sinon la rue la plus proche)
+    let front = -1, fs = -Infinity;
+    for (let i = 0; i < n; i++) {
+      const [ax, az] = ring[i], [bx, bz] = ring[(i + 1) % n], L = Math.hypot(bx - ax, bz - az);
+      if (L < 3) continue;
+      const nx = -(bz - az) / L, nz = (bx - ax) / L, mx = (ax + bx) / 2, mz = (az + bz) / 2;
+      let f;
+      if (dw) { const tx = dw[0] - mx, tz = dw[1] - mz; f = (tx * nx + tz * nz) / (Math.hypot(tx, tz) || 1); }
+      else { const fc = this.facing(mx, mz, nx, nz); f = fc ? 1 - fc.d / 40 : -1; }
+      if (f * Math.min(L, 12) > fs) { fs = f * Math.min(L, 12); front = i; }
+    }
+    for (let i = 0; i < n; i++) {
+      const [ax, az] = ring[i], [bx, bz] = ring[(i + 1) % n], dx = bx - ax, dz = bz - az, L = Math.hypot(dx, dz);
+      if (L < 0.05) continue;
+      const ux = dx / L, uz = dz / L, nx = -uz, nz = ux, mx = (ax + bx) / 2, mz = (az + bz) / 2;
+      const party = L < 60 && this.insideOther(mx + nx * 0.8, mz + nz * 0.8, idx);
+      addSeg(W.grid, ax, az, bx, bz, 0);
+      E.push(ax, gMin, az, ax, wallTop, az, ax, wallTop, az, bx, wallTop, bz);
+      quad(A[M_TRIM], ax, base, az, bx, base, bz, bx, floor0, bz, ax, floor0, az, nx, 0, nz, FOUND, 0, 0, L / 4, 0.3);   // fondation
+      for (let f = 0; f < levels; f++) {
+        const [m, c] = skin(f), y0 = floor0 + f * F, y1 = y0 + F;
+        quad(A[m], ax, y0, az, bx, y0, bz, bx, y1, bz, ax, y1, az, nx, 0, nz, c, 0, y0 / 2, L / 2, y1 / 2);
+      }
+      if (party || L < 2.2) continue;
+      const P = (s, y, o = 0.05) => [ax + ux * s + nx * o, y, az + uz * s + nz * o];
+      const panel = (mat, s, y0, w, h, c, o) => quad(A[mat], ...P(s - w / 2, y0, o), ...P(s + w / 2, y0, o), ...P(s + w / 2, y0 + h, o), ...P(s - w / 2, y0 + h, o), nx, 0, nz, c);
+      const win = (s, y0, w, h) => {
+        panel(M_HWIN, s, y0, w, h, WHITE);
+        panel(M_TRIM, s, y0 - 0.12, w + 0.2, 0.12, TRIM, 0.08);       // appui
+        if (shutters && i === front) for (const sg of [-1, 1]) panel(M_TRIM, s + sg * (w / 2 + 0.24), y0, 0.38, h, shutters, 0.07);
+      };
+      const used = [];                                                 // au rez-de-chaussée : [début, fin] déjà pris
+      const isFree = (s0, s1) => s0 >= 0.4 && s1 <= L - 0.4 && used.every(([a, c]) => s1 < a - 0.3 || s0 > c + 0.3);
+      if (i === front) {
+        if (gar) {                                                     // porte de garage, au niveau du sol, au bout de l'entrée
+          const sg = clamp((dw[2] - ax) * ux + (dw[3] - az) * uz, 1.5, L - 1.5), [gx, , gz] = P(sg, 0, 0), g0 = T(gx, gz);
+          panel(M_GARAGE, sg, g0 - 0.1, 2.7, 2.35, pick(GARAGE_COLS, h1(6)));
+          panel(M_TRIM, sg, g0 + 2.25, 3.0, 0.18, TRIM, 0.08);
+          used.push([sg - 1.45, sg + 1.45]);
+        }
+        // porte d'entrée, perron de béton (et une marche si la maison est haute)
+        let sd = L * (0.3 + h1(7) * 0.4);
+        if (used.length) { const [g0, g1] = used[0]; sd = g0 > L / 2 ? g0 * (0.35 + h1(7) * 0.3) : g1 + (L - g1) * (0.35 + h1(7) * 0.3); }
+        sd = clamp(sd, 0.9, L - 0.9);
+        panel(M_DOOR, sd, floor0, 0.95, 2.1, pick(DOOR_COLORS, h1(8)));
+        used.push([sd - 0.6, sd + 0.6]);
+        const [px, , pz] = P(sd, 0, 0.7), gs = T(px, pz);
+        obox(A[M_TRIM], px, pz, ux, uz, 0.85, 0.65, gs - 0.4, floor0 - 0.02, gray(0.74));
+        if (floor0 - gs > 0.45) { const [qx, , qz] = P(sd, 0, 1.6), gq = T(qx, qz); obox(A[M_TRIM], qx, qz, ux, uz, 0.75, 0.25, gq - 0.4, (gq + floor0) / 2, gray(0.7)); }
+        if (levels === 1) {                                            // bungalow : la grande fenêtre du salon, dans le plus grand espace libre
+          const cuts = [[0.4, 0.4], ...used.slice().sort((p, q) => p[0] - q[0]), [L - 0.4, L - 0.4]];
+          let bs = null;
+          for (let k = 0; k < cuts.length - 1; k++) { const a = cuts[k][1] + 0.3, c = cuts[k + 1][0] - 0.3; if (c - a > 2.6 && (!bs || c - a > bs[1] - bs[0])) bs = [a, c]; }
+          if (bs) { const w = Math.min(2.8, bs[1] - bs[0] - 0.2), s = (bs[0] + bs[1]) / 2; win(s, floor0 + 0.75, w, 1.45); used.push([s - w / 2, s + w / 2]); }
+        }
+      }
+      for (let f = 0; f < levels; f++) {                               // fenêtres régulières, là où il reste de la place
+        const y0 = floor0 + f * F + 0.85, k = Math.max(1, Math.floor((L - 0.8) / 3.3)), w = Math.min(1.2, L - 1);
+        for (let q = 0; q < k; q++) {
+          const s = (q + 0.5) * L / k;
+          if (f === 0 ? !isFree(s - w / 2, s + w / 2) : s - w / 2 < 0.4 || s + w / 2 > L - 0.4) continue;
+          win(s, y0, w, 1.25);
+        }
+      }
+    }
+    const gable = b.rs === 'g' && fill > 0.86, pitch = levels === 1 ? 0.36 + h1(10) * 0.12 : 0.44 + h1(10) * 0.14;
+    const [tm, tc] = skin(levels - 1);
+    this.houseRoof(A, E, box, wallTop, clamp(box.hb * pitch, 1, 4.2), (b.rc && cssColor(b.rc)) || pick(HOUSE_ROOFS, h1(5)), gable, tm, tc, h1(11) < 0.4 ? brickCol : null);
+    if (dw) this.driveway(A, dw, gar);
+  }
+  // toit de maison : bardeaux en pente douce, à deux versants (pignons du revêtement des murs) ou en croupe,
+  // avant-toit à bordure blanche, parfois une cheminée de brique
+  houseRoof(A, E, bx, y, R, col, gable, wallMat, wallCol, chimneyCol) {
+    const ov = 0.45, ha = bx.ha, hb = bx.hb, Aa = ha + (gable ? 0.3 : ov), Bb = hb + ov, r = gable ? Aa : Math.max(0, Aa - Bb);
+    const ye = y - R * ov / Bb;                                        // l'avant-toit descend : le versant passe juste sur le haut du mur
+    const ax = bx.ax, az = bx.az, px = -az, pz = ax;
+    const Wp = (sa, sb, yy) => [bx.cx + ax * sa + px * sb, yy, bx.cz + az * sa + pz * sb];
+    const k = Math.hypot(Bb, R) / R / 2;                               // v : longueur de pente (une texture = 2 m)
+    const uvOf = (pts, ex, ez) => pts.flatMap(p => [(p[0] * ex + p[2] * ez) / 2, (p[1] - ye) * k]);
+    const M = A[M_SHINGLE], TRIM = gray(0.97);
+    const P1 = Wp(Aa, Bb, ye), P2 = Wp(-Aa, Bb, ye), P3 = Wp(-Aa, -Bb, ye), P4 = Wp(Aa, -Bb, ye), R1 = Wp(r, 0, ye + R), R2 = Wp(-r, 0, ye + R);
+    poly(M, [P1, P2, R2, R1], uvOf([P1, P2, R2, R1], ax, az), px, 1, pz, col);
+    poly(M, [P3, P4, R1, R2], uvOf([P3, P4, R1, R2], ax, az), -px, 1, -pz, col);
+    if (gable) for (const sg of [1, -1]) {                             // pignons
+      const a = Wp(sg * ha, hb, y), c = Wp(sg * ha, -hb, y), t = Wp(sg * ha, 0, ye + R);
+      poly(A[wallMat], [a, c, t], [0, y / 2, hb, y / 2, hb / 2, (ye + R) / 2], ax * sg, 0, az * sg, wallCol);
+    } else {
+      poly(M, [P4, P1, R1], uvOf([P4, P1, R1], px, pz), ax, 1, az, col);
+      poly(M, [P2, P3, R2], uvOf([P2, P3, R2], px, pz), -ax, 1, -az, col);
+    }
+    // bordure d'avant-toit et dessous de l'avant-toit
+    const eaves = [[P1, P2, px, pz], [P3, P4, -px, -pz], ...(gable ? [] : [[P4, P1, ax, az], [P2, P3, -ax, -az]])];
+    for (const [p, q, hx, hz] of eaves) quad(A[M_TRIM], ...p, ...q, q[0], q[1] - 0.2, q[2], p[0], p[1] - 0.2, p[2], hx, 0, hz, TRIM);
+    const S = (sa, sb) => Wp(sa, sb, ye - 0.2);
+    const soffits = [[S(Aa, Bb), S(-Aa, Bb), S(-ha, hb), S(ha, hb)], [S(-Aa, -Bb), S(Aa, -Bb), S(ha, -hb), S(-ha, -hb)]];
+    if (!gable) soffits.push([S(Aa, -Bb), S(Aa, Bb), S(ha, hb), S(ha, -hb)], [S(-Aa, Bb), S(-Aa, -Bb), S(-ha, -hb), S(-ha, hb)]);
+    for (const q of soffits) quad(A[M_TRIM], ...q[0], ...q[1], ...q[2], ...q[3], 0, -1, 0, TRIM);
+    for (const [p, q] of [[R1, R2], [P1, P2], [P3, P4], [P1, R1], [P4, R1], [P2, R2], [P3, R2], ...(gable ? [] : [[P4, P1], [P2, P3]])]) E.push(...p, ...q);
+    if (chimneyCol) {
+      const [cx, , cz] = Wp(gable ? ha * 0.55 : Math.max(0, r - 0.6), Bb * 0.3, 0);
+      obox(A[M_HBRICK], cx, cz, ax, az, 0.4, 0.45, ye + R * 0.4, ye + R + 0.8, chimneyCol);
+    }
+  }
+  // entrée asphaltée : de la rue jusqu'au garage, ou jusqu'à la place de stationnement à côté de la maison
+  driveway(A, dw, gar) {
+    const T = this.W.terrain, [sx, sz, hx, hz] = dw, L = Math.hypot(hx - sx, hz - sz);
+    if (L < 1) return;
+    const ux = (hx - sx) / L, uz = (hz - sz) / L, vx = -uz, vz = ux, hw = 1.5, ex = gar ? 0.2 : 6, col = gray(0.3);
+    const pts = densify([[sx, sz], [hx + ux * ex, hz + uz * ex]], 2.5), Y = (x, z) => T(x, z) + 0.07;
+    let v = 0;
+    for (let k = 0; k < pts.length - 1; k++) {
+      const [x0, z0] = pts[k], [x1, z1] = pts[k + 1], l = Math.hypot(x1 - x0, z1 - z0);
+      const a = [x0 - vx * hw, z0 - vz * hw], b = [x0 + vx * hw, z0 + vz * hw], c = [x1 + vx * hw, z1 + vz * hw], d = [x1 - vx * hw, z1 - vz * hw];
+      quad(A[M_ROOF_FLAT], a[0], Y(...a), a[1], b[0], Y(...b), b[1], c[0], Y(...c), c[1], d[0], Y(...d), d[1], 0, 1, 0, col, 0, v / 3, 1, (v + l) / 3);
+      v += l;
+    }
   }
   // Porte de la ville : deux piliers, une voûte au-dessus de la rue, créneaux et échauguettes.
   // Seuls les piliers bloquent la voiture.
@@ -3511,7 +3810,9 @@ function buildRealWorld(id, D, cityStyle) {
   };
   W.rampAt = () => -Infinity;
   W.extraAt = null;   // bosses et tremplins du mode Chantiers
-  W.ground = (x, z) => Math.max(W.terrain(x, z), W.waterAt(x, z) - 0.9, W.extraAt ? W.extraAt(x, z) : -Infinity, W.parkAt ? W.parkAt(x, z) : -Infinity);
+  // y (facultatif) : la hauteur de qui demande ; un pont ou une rampe compte seulement s'il est sous lui (W.deckAt)
+  W.ground = (x, z, y) => Math.max(W.terrain(x, z), W.waterAt(x, z) - 0.9, W.extraAt ? W.extraAt(x, z) : -Infinity, W.parkAt ? W.parkAt(x, z) : -Infinity,
+    y !== undefined && W.deckAt ? W.deckAt(x, z, y) : -Infinity);
   const b = D.bounds;
   W.clamp = () => {
     const m = 4;
@@ -3574,16 +3875,21 @@ function buildRealWorld(id, D, cityStyle) {
   const segs = [];
   W.roadGrid = new Grid(24);
   D.roads.forEach((r, i) => {
-    const pts = ringOf(r.p);
-    ribbonInto(accs[r.k], densify(pts, 4), r.w, 0.12 + (i % 4) * 0.03, W.terrain, r.k === 0 ? 12 : r.k === 2 ? 3 : r.w);
+    const pts = ringOf(r.p), lift = 0.12 + (i % 4) * 0.03, uLen = r.k === 0 ? 12 : r.k === 2 ? 3 : r.w;
+    if (r.e) deckRibbon(accs[r.k], densifyE(pts, r.e, 4), r.w, lift, W.terrain, uLen);   // pont, viaduc, rampe d'échangeur
+    else ribbonInto(accs[r.k], densify(pts, 4), r.w, lift, W.terrain, uLen);
     for (let k = 0; k < pts.length - 1; k++) {
       const s = { ax: pts[k][0], az: pts[k][1], bx: pts[k + 1][0], bz: pts[k + 1][1], w: r.w, n: r.n, k: r.k };
+      if (r.e) { s.ea = r.e[k]; s.eb = r.e[k + 1]; }                    // hauteur au-dessus du sol aux deux bouts
       segs.push(s);
       addRoadSeg(W.roadGrid, s);
     }
   });
   accs.forEach((a, k) => { if (a.pos.length) addMesh(W, accGeometry(a), MAT.road[k]); });
-  W.roadWays = D.roads.map(r => ({ pts: ringOf(r.p), w: r.w, k: r.k }));
+  // le trafic prend toutes les routes ; au sol (stationnement, piétons, cyclistes, chantiers, bonus) : ni autoroute ni pont
+  W.graphWays = D.roads.map(r => ({ pts: ringOf(r.p), w: r.w, k: r.k, es: r.e || null }));
+  W.roadWays = W.graphWays.filter((w, i) => !D.roads[i].e && !D.roads[i].x);
+  addOverpasses(W, D);
   addBikeWays(W, (D.bikes || []).map(bw => ({ pts: ringOf(bw.p), w: bw.w, k: bw.k })));
   W.areas = (D.areas || []).map(a => {
     const ring = ringOf(a.p), xs = ring.map(p => p[0]), zs = ring.map(p => p[1]);
@@ -3593,11 +3899,15 @@ function buildRealWorld(id, D, cityStyle) {
   W.areas.forEach(a => W.areaGrid.add(a, a.b[0], a.b[2], a.b[1], a.b[3]));
   // Nom de l'endroit où roule la voiture : la rue sur laquelle on est vraiment (dans l'axe de la
   // voiture, sans déborder de la chaussée), sinon la piste cyclable, sinon le parc ou la place ; rien hors de tout ça.
-  W.streetAt = (x, z, hx, hz, current) => {
+  W.streetAt = (x, z, hx, hz, current, y) => {
     let best = null, bs = Infinity;
     for (const s of W.roadGrid.at(x, z)) {
       const d = closestOnSeg(x, z, s)[0], lim = s.w / 2 + 1.2;
       if (d > lim) continue;
+      if (y !== undefined) {                                           // sur un pont ou dessous : la rue à notre hauteur
+        const t = clamp(((x - s.ax) * (s.bx - s.ax) + (z - s.az) * (s.bz - s.az)) / ((s.bx - s.ax) ** 2 + (s.bz - s.az) ** 2 || 1e-9), 0, 1);
+        if (Math.abs(W.terrain(x, z) + (s.ea !== undefined ? s.ea + (s.eb - s.ea) * t : 0) - y) > (s.ea !== undefined ? 3 : 5)) continue;
+      }
       const L = Math.hypot(s.bx - s.ax, s.bz - s.az) || 1;
       const align = Math.abs(((s.bx - s.ax) * hx + (s.bz - s.az) * hz) / L);
       const name = s.n || (s.k === 3 ? 'Ruelle' : '');
@@ -3612,7 +3922,7 @@ function buildRealWorld(id, D, cityStyle) {
   W.nearestRoad = (x, z) => {
     let best = null, bd = Infinity;
     for (const s of segs) {
-      if (s.k === 3) continue;
+      if (s.k === 3 || s.ea > 0.5 || s.eb > 0.5) continue;              // au sol seulement
       const [d, px, pz] = closestOnSeg(x, z, s);
       if (d < bd && (!W.inRegion || W.inRegion(px, pz, -4))) { bd = d; best = [px, pz, s]; }
     }
@@ -3677,7 +3987,8 @@ function buildRealWorld(id, D, cityStyle) {
           const hit = segIntersect(ax, az, bx, bz, s.ax, s.az, s.bx, s.bz);
           if (!hit || crossings.some(c => Math.hypot(c.x - hit[0], c.z - hit[1]) < Math.max(c.w, r.w))) continue;
           const L = Math.hypot(bx - ax, bz - az) || 1;
-          crossings.push({ x: hit[0], z: hit[1], ux: (bx - ax) / L, uz: (bz - az) / L, w: r.w });
+          const th = clamp(((hit[0] - ax) * (bx - ax) + (hit[1] - az) * (bz - az)) / (L * L), 0, 1);
+          crossings.push({ x: hit[0], z: hit[1], ux: (bx - ax) / L, uz: (bz - az) / L, w: r.w, e: r.e ? lerp(r.e[k], r.e[k + 1], th) : 0 });
         }
       }
     }
@@ -3692,7 +4003,7 @@ function buildRealWorld(id, D, cityStyle) {
       const ix = c.ux * inward, iz = c.uz * inward, vx = -iz, vz = ix;
       const cx = c.x + ix * 0.9, cz = c.z + iz * 0.9, hw = c.w / 2, n = Math.max(1, Math.ceil(c.w / 2.5)), step = c.w / n;
       for (let k = 0; k < n; k++) {
-        const o = -hw + step * (k + 0.5), x = cx + vx * o, z = cz + vz * o, y = W.terrain(x, z), len = Math.min(2.4, step - 0.1), hl = len / 2;
+        const o = -hw + step * (k + 0.5), x = cx + vx * o, z = cz + vz * o, y = W.terrain(x, z) + c.e, len = Math.min(2.4, step - 0.1), hl = len / 2;
         for (const sg of [-1, 1]) obox(BA[0], x + vx * hl * sg, z + vz * hl * sg, vx, vz, 0.05, 0.3, y, y + 1.15, WHITE);
         for (const [y0, y1] of [[0.55, 0.8], [0.88, 1.13]]) for (const sd of [-1, 1]) {
           const ox = ix * 0.04 * sd, oz = iz * 0.04 * sd;
@@ -3701,7 +4012,7 @@ function buildRealWorld(id, D, cityStyle) {
         }
         if (k % 2 === 0) obox(BA[3], x + vx * hl, z + vz * hl, vx, vz, 0.09, 0.09, y + 1.15, y + 1.33, WHITE);
       }
-      const sx = c.x + ix * 0.3, sz = c.z + iz * 0.3, y = W.terrain(sx, sz), rx = iz, rz = -ix;   // panneau tourné vers l'intérieur
+      const sx = c.x + ix * 0.3, sz = c.z + iz * 0.3, y = W.terrain(sx, sz) + c.e, rx = iz, rz = -ix;   // panneau tourné vers l'intérieur
       quad(BA[2], sx - rx, y + 1.45, sz - rz, sx + rx, y + 1.45, sz + rz, sx + rx, y + 2.45, sz + rz, sx - rx, y + 2.45, sz - rz, ix, 0, iz, WHITE);
       obox(BA[0], sx - ix * 0.03, sz - iz * 0.03, rx, rz, 1.03, 0.025, y + 1.42, y + 2.48, gray(0.2));
       for (const sg of [-1, 1]) obox(BA[0], sx + rx * 0.8 * sg - ix * 0.07, sz + rz * 0.8 * sg - iz * 0.07, ix, iz, 0.03, 0.03, y, y + 1.45, gray(0.55));
@@ -3716,7 +4027,7 @@ function buildRealWorld(id, D, cityStyle) {
   for (const sh of D.shops || []) { if (!shopsBy.has(sh.b)) shopsBy.set(sh.b, []); shopsBy.get(sh.b).push(sh); }
   const batch = new CityBatch(W, CITY_STYLES[cityStyle], W.roadGrid);
   addStatues(W, D.statues, batch.signs);                              // statues et monuments (plaque gravée au passage)
-  batch.build(D.buildings.map((bd, i) => ({ ring: ringOf(bd.p), h: bd.h, l: bd.l, t: bd.t || bd.s || '', n: bd.n, rs: bd.rs, rc: bd.rc, shops: shopsBy.get(i) })));
+  batch.build(D.buildings.map((bd, i) => ({ ring: ringOf(bd.p), h: bd.h, l: bd.l, t: bd.t || bd.s || '', n: bd.n, rs: bd.rs, rc: bd.rc, dw: bd.dw, gar: bd.gar, shops: shopsBy.get(i) })));
 
   addSports(W, D.sports);                                              // terrains, piscines, patinoires, jeux
   const sportGrid = new Grid(40);
@@ -3827,7 +4138,11 @@ function buildRealWorld(id, D, cityStyle) {
     for (const wl of D.walls || []) strokePolyline(g, P, wl.p);
     for (const k of [3, 2, 1, 0]) {
       g.strokeStyle = k === 0 ? pal.major : k === 2 ? pal.ped : pal.road;
-      for (const r of D.roads) if (r.k === k) { g.lineWidth = Math.max(1.6, r.w * res); strokePolyline(g, P, r.p); }
+      for (const r of D.roads) if (r.k === k && !r.e) { g.lineWidth = Math.max(1.6, r.w * res); strokePolyline(g, P, r.p); }
+    }
+    for (const r of D.roads) if (r.e) {                               // ponts et rampes par-dessus, avec un liseré
+      g.strokeStyle = 'rgba(0,0,0,0.45)'; g.lineWidth = Math.max(2.6, r.w * res + 1.6); strokePolyline(g, P, r.p);
+      g.strokeStyle = r.k === 0 ? pal.major : pal.road; g.lineWidth = Math.max(1.6, r.w * res); strokePolyline(g, P, r.p);
     }
     g.strokeStyle = pal.bike; g.lineWidth = 1.6;
     for (const bw of D.bikes || []) strokePolyline(g, P, bw.p);
@@ -5016,8 +5331,8 @@ function setParkedMatrix(W, c) {
   const [pm, dm, bm] = W.parked.meshes[c.type];
   W.parked.dirty.add(c.type);
   if (c.off) { pm.setMatrixAt(c.slot, ZERO_M); dm.setMatrixAt(c.slot, ZERO_M); bm.setMatrixAt(c.slot, ZERO_M); return; }
-  const G = W.ground, fx = Math.sin(c.yaw), fz = Math.cos(c.yaw), hl = c.L * 0.4, y = G(c.x, c.z);
-  const pitch = -Math.atan2(G(c.x + fx * hl, c.z + fz * hl) - G(c.x - fx * hl, c.z - fz * hl), 2 * hl);
+  const G = W.ground, fx = Math.sin(c.yaw), fz = Math.cos(c.yaw), hl = c.L * 0.4, y = G(c.x, c.z) + (c.el || 0);
+  const pitch = -Math.atan2(G(c.x + fx * hl, c.z + fz * hl) - G(c.x - fx * hl, c.z - fz * hl) + (c.els || 0) * 2 * hl, 2 * hl);
   _pq4.setFromEuler(_pe4.set(pitch + c.tx, c.yaw, c.tz, 'YXZ'));
   _pm4.compose(_pp4.set(c.x, y + c.hop, c.z), _pq4, ONE);
   pm.setMatrixAt(c.slot, _pm4); dm.setMatrixAt(c.slot, _pm4);
@@ -5134,8 +5449,12 @@ const flames = (() => {
 // Sert à l'itinéraire GPS et à la circulation.
 // =====================================================================
 function buildRoadGraph(W) {
-  const ways = W.roadWays.filter(w => w.k <= 1 && w.pts.length >= 2);
+  const ways = (W.graphWays || W.roadWays).filter(w => w.k <= 1 && w.pts.length >= 2);
   const inside = (x, z) => !W.inRegion || W.inRegion(x, z, 6);
+  // hauteur d'une voie au-dessus du sol (pont, rampe d'échangeur) au paramètre t de son segment j : deux voies ne se
+  // rejoignent (carrefour) qu'à la même hauteur ; sinon l'une passe par-dessus l'autre
+  const eAt = (w, j, t) => (w.es ? w.es[j] + (w.es[j + 1] - w.es[j]) * t : 0);
+  const along = (x, z, ax, az, bx, bz) => clamp(((x - ax) * (bx - ax) + (z - az) * (bz - az)) / ((bx - ax) ** 2 + (bz - az) ** 2 || 1e-9), 0, 1);
   // 1) points de croisement : intersections de segments, et bouts de rue qui touchent le milieu d'une autre
   const segGrid = new Grid(30), cuts = ways.map(w => w.pts.map(() => []));
   ways.forEach((w, i) => { for (let j = 0; j < w.pts.length - 1; j++) { const [ax, az] = w.pts[j], [bx, bz] = w.pts[j + 1]; segGrid.add([i, j], Math.min(ax, bx) - 4, Math.min(az, bz) - 4, Math.max(ax, bx) + 4, Math.max(az, bz) + 4); } });
@@ -5150,29 +5469,33 @@ function buildRoadGraph(W) {
         const key = i * 100000 + j + '|' + i2 * 100000 + j2;
         if (seen.has(key)) continue;
         seen.add(key);
-        const [cx, cz] = ways[i2].pts[j2], [dx, dz] = ways[i2].pts[j2 + 1];
+        const w2 = ways[i2], [cx, cz] = w2.pts[j2], [dx, dz] = w2.pts[j2 + 1];
         const hit = segIntersect(ax, az, bx, bz, cx, cz, dx, dz);
-        if (hit) { cuts[i][j].push(hit); cuts[i2][j2].push(hit); continue; }
-        // bout de rue (T) : à moins de 4 m du segment de l'autre
-        for (const [e, own, other, oi, oj] of [[[ax, az], j === 0, [cx, cz, dx, dz], i2, j2], [[bx, bz], j === w.pts.length - 2, [cx, cz, dx, dz], i2, j2],
-          [[cx, cz], j2 === 0, [ax, az, bx, bz], i, j], [[dx, dz], j2 === ways[i2].pts.length - 2, [ax, az, bx, bz], i, j]]) {
+        if (hit) {
+          if (Math.abs(eAt(w, j, along(hit[0], hit[1], ax, az, bx, bz)) - eAt(w2, j2, along(hit[0], hit[1], cx, cz, dx, dz))) < 2) { cuts[i][j].push(hit); cuts[i2][j2].push(hit); }
+          continue;
+        }
+        // bout de rue (T) : à moins de 4 m du segment de l'autre, et à la même hauteur
+        for (const [e, own, other, oi, oj, ee] of [[[ax, az], j === 0, [cx, cz, dx, dz], i2, j2, eAt(w, j, 0)], [[bx, bz], j === w.pts.length - 2, [cx, cz, dx, dz], i2, j2, eAt(w, j, 1)],
+          [[cx, cz], j2 === 0, [ax, az, bx, bz], i, j, eAt(w2, j2, 0)], [[dx, dz], j2 === w2.pts.length - 2, [ax, az, bx, bz], i, j, eAt(w2, j2, 1)]]) {
           if (!own) continue;
           const [d, px, pz] = closestOnSeg(e[0], e[1], { ax: other[0], az: other[1], bx: other[2], bz: other[3] });
-          if (d < 4) { cuts[oi][oj].push([px, pz]); if (oi === i2) cuts[i][j].push([px, pz]); else cuts[i2][j2].push([px, pz]); }   // les deux rues partagent le même point
+          if (d >= 4 || Math.abs(ee - eAt(ways[oi], oj, along(px, pz, ...other))) >= 2) continue;
+          cuts[oi][oj].push([px, pz]); if (oi === i2) cuts[i][j].push([px, pz]); else cuts[i2][j2].push([px, pz]);   // les deux rues partagent le même point
         }
       }
     }
   });
-  // 2) nœuds (fusionnés à moins de 1,5 m) et arêtes
-  const X = [], Z = [], adj = [], WD = [], no = new Set(), nodeGrid = new Grid(6);
+  // 2) nœuds (fusionnés à moins de 1,5 m, à la même hauteur) et arêtes
+  const X = [], Z = [], E = [], adj = [], WD = [], no = new Set(), nodeGrid = new Grid(6);
   let curW = 8;
-  const node = (x, z, snap) => {
+  const node = (x, z, snap, e) => {
     const ci = Math.floor(x / 6), cj = Math.floor(z / 6);
     for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) for (const id of nodeGrid.at((ci + di) * 6 + 3, (cj + dj) * 6 + 3)) {
-      if (Math.abs(X[id] - x) < snap && Math.abs(Z[id] - z) < snap) { WD[id] = Math.max(WD[id], curW); return id; }
+      if (Math.abs(X[id] - x) < snap && Math.abs(Z[id] - z) < snap && Math.abs(E[id] - e) < 2) { WD[id] = Math.max(WD[id], curW); return id; }
     }
     const id = X.length;
-    X.push(x); Z.push(z); adj.push([]); WD.push(curW);
+    X.push(x); Z.push(z); E.push(e); adj.push([]); WD.push(curW);
     nodeGrid.add(id, x, z, x, z);
     return id;
   };
@@ -5182,39 +5505,40 @@ function buildRoadGraph(W) {
     const pts = [];
     for (let j = 0; j < w.pts.length - 1; j++) {
       const [ax, az] = w.pts[j], [bx, bz] = w.pts[j + 1], L2 = (bx - ax) ** 2 + (bz - az) ** 2 || 1;
-      pts.push([ax, az, true]);
-      for (const [x, z] of cuts[i][j].map(c => [c[0], c[1], ((c[0] - ax) * (bx - ax) + (c[1] - az) * (bz - az)) / L2]).sort((p, q) => p[2] - q[2])) pts.push([x, z, true]);
+      pts.push([ax, az, eAt(w, j, 0)]);
+      for (const [x, z, t] of cuts[i][j].map(c => [c[0], c[1], ((c[0] - ax) * (bx - ax) + (c[1] - az) * (bz - az)) / L2]).sort((p, q) => p[2] - q[2])) pts.push([x, z, eAt(w, j, clamp(t, 0, 1))]);
     }
     const last = w.pts[w.pts.length - 1];
-    pts.push([last[0], last[1], true]);
+    pts.push([last[0], last[1], eAt(w, w.pts.length - 2, 1)]);
     let prev = -1;
     for (let k = 0; k < pts.length; k++) {
-      const [x, z] = pts[k];
+      const [x, z, e] = pts[k];
       if (k > 0) {                                                   // points intermédiaires tous les 8 m
-        const [px, pz] = pts[k - 1], L = Math.hypot(x - px, z - pz), n = Math.floor(L / 8);
+        const [px, pz, pe] = pts[k - 1], L = Math.hypot(x - px, z - pz), n = Math.floor(L / 8);
         for (let q = 1; q < n; q++) {
           const ix = px + (x - px) * q / n, iz = pz + (z - pz) * q / n;
           if (!inside(ix, iz)) { prev = -1; continue; }
-          const id = node(ix, iz, 0.4);
+          const id = node(ix, iz, 0.4, pe + (e - pe) * q / n);
           if (prev >= 0) link(prev, id);
           prev = id;
         }
       }
       if (!inside(x, z)) { prev = -1; continue; }
-      const id = node(x, z, 1.5);
+      const id = node(x, z, 1.5, e);
       if (prev >= 0) link(prev, id);
       prev = id;
     }
   });
-  W.graph = { X, Z, adj, W: WD, no, grid: nodeGrid, n: X.length, blocked: null };
+  W.graph = { X, Z, E, adj, W: WD, no, grid: nodeGrid, n: X.length, blocked: null, raised: E.some(e => e > 0.5) };
 }
-function nearestNode(W, x, z, maxR = 200) {
+function nearestNode(W, x, z, maxR = 200, y) {                         // y : pas le pont au-dessus de nous (ni la rue dessous)
   const G = W.graph;
   let best = -1, bd = Infinity;
   for (let r = 12; r <= maxR && best < 0; r *= 2) {
     for (let i = Math.floor((x - r) / 6); i <= Math.floor((x + r) / 6); i++) for (let j = Math.floor((z - r) / 6); j <= Math.floor((z + r) / 6); j++) {
       for (const id of G.grid.at(i * 6 + 3, j * 6 + 3)) {
         if (!G.adj[id].length) continue;
+        if (y !== undefined && G.raised && Math.abs(W.ground(G.X[id], G.Z[id]) + G.E[id] - y) > 4) continue;
         const d = (G.X[id] - x) ** 2 + (G.Z[id] - z) ** 2;
         if (d < bd) { bd = d; best = id; }
       }
@@ -5294,7 +5618,7 @@ function placeAI(v, near, minD, maxD, W = world) {
     A.turn = turnSpeedAI(G, a, b, A.c, A.cruise);
     A.speed = A.cruise * 0.7;
     const dx = (G.X[b] - G.X[a]) / A.L, dz = (G.Z[b] - G.Z[a]) / A.L, lane = laneOf(G, a, b);
-    Object.assign(v, { x: G.X[a] + dz * lane, z: G.Z[a] - dx * lane, yaw: Math.atan2(dx, dz), vx: 0, vz: 0, w: 0, tx: 0, tz: 0, tvx: 0, tvz: 0, hop: 0, vy: 0, alarm: 0, off: false });
+    Object.assign(v, { x: G.X[a] + dz * lane, z: G.Z[a] - dx * lane, yaw: Math.atan2(dx, dz), vx: 0, vz: 0, w: 0, tx: 0, tz: 0, tvx: 0, tvz: 0, hop: 0, vy: 0, alarm: 0, off: false, el: G.E[a], els: 0 });
     return true;
   }
   return false;
@@ -5320,10 +5644,10 @@ function updateTraffic(dt) {
     const hx = Math.sin(v.yaw), hz = Math.cos(v.yaw);
     let target = Math.min(A.cruise, A.turn);
     const ax = px - v.x, az = pz - v.z, ahead = ax * hx + az * hz, lat = Math.abs(ax * hz - az * hx);
-    const blockedByYou = ahead > 0 && ahead < 17 && lat < 2.6;
+    const blockedByYou = ahead > 0 && ahead < 17 && lat < 2.6 && Math.abs(car.pos.y - world.ground(v.x, v.z) - (v.el || 0)) < 3;
     if (blockedByYou) target = Math.min(target, Math.max(0, (ahead - 6.5) * 0.9));
     for (const u of P.ai) {
-      if (u === v || u.off) continue;
+      if (u === v || u.off || Math.abs((u.el || 0) - (v.el || 0)) > 2) continue;   // l'une sur un pont, l'autre dessous
       const bx = u.x - v.x, bz = u.z - v.z;
       if (bx > 16 || bx < -16 || bz > 16 || bz < -16) continue;
       const ah = bx * hx + bz * hz, la = Math.abs(bx * hz - bz * hx);
@@ -5347,6 +5671,7 @@ function updateTraffic(dt) {
     const k = 1 - Math.exp(-10 * dt);
     v.x += (tx - v.x) * k; v.z += (tz - v.z) * k;                      // on glisse vers la voie (virages en douceur)
     v.yaw = lerpAngle(v.yaw, Math.atan2(dx, dz), 1 - Math.exp(-6 * dt));
+    v.el = G.E[A.a] + (G.E[A.b] - G.E[A.a]) * f; v.els = (G.E[A.b] - G.E[A.a]) / A.L;   // hauteur et pente sur un pont, une rampe
     v.vx = Math.sin(v.yaw) * A.speed; v.vz = Math.cos(v.yaw) * A.speed;
     regrid(P, v);
     P.redraw.add(v);
@@ -5422,7 +5747,7 @@ function collideGrid(grid, fx, fz, off) {
   const items = grid.at(car.pos.x + fx * off, car.pos.z + fz * off);
   for (let n = 0; n < items.length; n++) {
     const it = items[n];
-    if (it.off) continue;
+    if (it.off || (it.y1 !== undefined && (car.pos.y > it.y1 || car.pos.y + 1.6 < it.y0))) continue;   // au-dessus ou au-dessous
     const cx = car.pos.x + fx * off, cz = car.pos.z + fz * off;
     let px = it.x, pz = it.z;
     if (it.seg) {
@@ -5493,7 +5818,8 @@ function collideParked(P, cx, cz) {
       if (v.off) continue;
       const ddx = cx - v.x, ddz = cz - v.z;
       if (ddx > 6.5 || ddx < -6.5 || ddz > 6.5 || ddz < -6.5) continue;
-      if (car.pos.y - G(v.x, v.z) > v.H - 0.25) continue;            // on passe par-dessus en sautant
+      const vy = G(v.x, v.z) + (v.el || 0);                           // el : hauteur du véhicule sur un pont, une rampe
+      if (car.pos.y - vy > v.H - 0.25 || vy - car.pos.y > 2) continue;   // on passe par-dessus en sautant, ou dessous (pont)
       const ux = Math.sin(v.yaw), uz = Math.cos(v.yaw), t = clamp(ddx * ux + ddz * uz, -v.e, v.e);
       const px = v.x + ux * t, pz = v.z + uz * t, ex = cx - px, ez = cz - pz, rr = v.r + CAR_R, d2 = ex * ex + ez * ez;
       if (d2 >= rr * rr || d2 < 1e-10) continue;
@@ -5551,6 +5877,7 @@ function parkedVsWorld(v) {
       for (let n = 0; n < items.length; n++) {
         const it = items[n];
         if (it.off) continue;
+        if (it.y1 !== undefined) { const vy = world.ground(v.x, v.z) + (v.el || 0); if (vy > it.y1 || vy + 1.6 < it.y0) continue; }
         let px = it.x, pz = it.z;
         if (it.seg) {
           const dx = it.bx - it.ax, dz = it.bz - it.az, t = clamp(((cx - it.ax) * dx + (cz - it.az) * dz) / (dx * dx + dz * dz || 1e-9), 0, 1);
@@ -5577,7 +5904,7 @@ function parkedVsParked(P, v) {
     const items = P.grid.at(v.x + di * cell, v.z + dj * cell);
     for (let n = 0; n < items.length; n++) {
       const u = P.list[items[n]];
-      if (u === v || u.off || Math.abs(u.x - v.x) > 9 || Math.abs(u.z - v.z) > 9) continue;
+      if (u === v || u.off || Math.abs(u.x - v.x) > 9 || Math.abs(u.z - v.z) > 9 || Math.abs((u.el || 0) - (v.el || 0)) > 2) continue;
       const wx = Math.sin(u.yaw), wz = Math.cos(u.yaw);
       segSegClosest(v.x - ux * v.e, v.z - uz * v.e, v.x + ux * v.e, v.z + uz * v.e, u.x - wx * u.e, u.z - wz * u.e, u.x + wx * u.e, u.z + wz * u.e);
       const ex = SS.ax - SS.bx, ez = SS.az - SS.bz, rr = v.r + u.r, d2 = ex * ex + ez * ez;
@@ -5722,7 +6049,8 @@ function wallBounce(ox, oz) {
 }
 
 function stepCar(dt, inp) {
-  const G = world.ground;
+  if (!(dt > 0)) return;                                               // première image : durée nulle (on diviserait par zéro)
+  const G = (x, z) => world.ground(x, z, car.pos.y);                  // à la hauteur du char : sur un pont, ou dessous
   const target = inp.steer;
   const rate = target === 0 ? 6 : (car.steer * target < 0 ? 9 : 3.2);
   car.steer = moveTowards(car.steer, target, rate * dt);
@@ -6705,6 +7033,9 @@ function genInfo(D) {
     note: `${D.place.label} : ${kmTxt(D.place.radius)} autour du centre, carte générée à la demande (${n(D.buildings.length)} bâtiments, ${n(D.shops.length)} commerces, ${n(D.statues.length)} statues et monuments). Départ fixe : la grande rue la plus proche du centre. Données © les contributeurs d'OpenStreetMap, relief Terrain Tiles (AWS).`,
   };
 }
+// style des bâtiments d'une carte générée : Québec (pierre, tôle, lucarnes) dans la Capitale-Nationale, Montréal (plex,
+// balcons, escaliers) ailleurs au Québec, neutre ailleurs ; les maisons de banlieue ont le leur partout
+const genStyle = D => (/Capitale-Nationale/.test(D.place.label) ? 'quebec' : /Québec\b.*\bCanada/.test(D.place.label) ? 'montreal' : 'ville');
 const mapName = W => (W.id === 'ville' ? W.D.place.name : { invente: 'Monde inventé', quebec: 'Vieux-Québec', plateau: 'Plateau-Mont-Royal' }[W.id]);
 const available = id => id === 'invente' || (id === 'ville' ? !!genData : !!(REAL_WORLDS[id] && REAL_WORLDS[id].data()?.roads));
 const MODE_NOTE = 'Mode Chantiers : des cônes orange, des clôtures et des barrières clignotantes partout (fonce dedans, tout ça s’envole), pelles mécaniques, bosses de terre et tremplins, et encore plus de cyclistes.';
@@ -6959,7 +7290,7 @@ async function selectWorld(id) {
     try {
       if (document.fonts && document.fonts.load) await Promise.race([document.fonts.load(SIGN_FONT).catch(() => {}), new Promise(r => setTimeout(r, 2500))]);
       await new Promise(r => requestAnimationFrame(() => setTimeout(r, 30)));
-      worlds[id] = id === 'invente' ? buildInventedWorld() : id === 'ville' ? buildRealWorld(id, genData, 'ville') : buildRealWorld(id, REAL_WORLDS[id].data(), REAL_WORLDS[id].city);
+      worlds[id] = id === 'invente' ? buildInventedWorld() : id === 'ville' ? buildRealWorld(id, genData, genStyle(genData)) : buildRealWorld(id, REAL_WORLDS[id].data(), REAL_WORLDS[id].city);
     } finally { el.start.disabled = false; }
   }
   if (world) scene.remove(world.group);
@@ -7003,7 +7334,9 @@ const genCache = {
       tx.onerror = tx.onabort = () => ko(tx.error);
     });
   },
-  async get(k) { try { return (await this.run('readonly', st => st.get(k))) || null; } catch (e) { return null; } },
+  async get(k) {                                                       // une carte d'une version plus ancienne du générateur : à refaire
+    try { const D = await this.run('readonly', st => st.get(k)); return D && D.version === CityGen.VERSION ? D : null; } catch (e) { return null; }
+  },
   async put(k, D) {
     try {
       let keys = [];
@@ -7144,7 +7477,8 @@ function updateZones() {
     startZone(`zone|${lat.toFixed(5)}|${lon.toFixed(5)}|${R}`, lat, lon, R);
   }
   // au bord, en attendant : où en est la zone suivante
-  if (d > R - 80 && now >= zones.noteAt) { zones.noteAt = now + 1500; toast(zones.note || 'Préparation de la zone suivante…', 1700); }
+  // au bord, quand la zone suivante n'est pas encore là : où en est-elle (sans envahir l'écran le reste du temps)
+  if (d > R - 30 && !(r && fits(r.D, car.pos.x, car.pos.z, R * 0.3)) && now >= zones.noteAt) { zones.noteAt = now + 3000; toast(zones.note || 'Préparation de la zone suivante…', 1800); }
 }
 async function enterZone(z) {
   zones.entering = true;
@@ -7158,7 +7492,7 @@ async function enterZone(z) {
     if (old.peds && old.peds.fare) endFare(false);
     genData = z.D;
     WORLD_INFO.ville = genInfo(z.D);
-    const W = buildRealWorld('ville', z.D, 'ville');
+    const W = buildRealWorld('ville', z.D, genStyle(z.D));
     worlds.ville = W;
     scene.remove(old.group);
     world = W;
@@ -7172,7 +7506,7 @@ async function enterZone(z) {
     const [x, zz] = W.geo.proj(lat, lon), dx = x - car.pos.x, dz = zz - car.pos.z, y0 = car.pos.y;
     car.pos.x = x;
     car.pos.z = zz;
-    if (car.grounded) car.pos.y = W.ground(x, zz);
+    if (car.grounded) car.pos.y = W.ground(x, zz, y0);
     camPos.x += dx; camPos.z += dz; camPos.y += car.pos.y - y0;
     const P = W.parked;                                               // pas de voiture stationnée pile où on arrive
     if (P && W.hideParked) W.hideParked(P.list.map((v, i) => i).filter(i => !P.list[i].ai && Math.hypot(P.list[i].x - x, P.list[i].z - zz) < 6), true);
@@ -7353,7 +7687,7 @@ const _fwd = new THREE.Vector3(), _side = new THREE.Vector3(), _up = new THREE.V
 const _basis = new THREE.Matrix4(), _qt = new THREE.Quaternion();
 
 function updateCarVisual(dt, inp) {
-  const G = world.ground;
+  const G = (x, z) => world.ground(x, z, car.pos.y);
   const { x, z } = car.pos;
   const fx = Math.sin(car.yaw), fz = Math.cos(car.yaw), rx = fz, rz = -fx;
   if (car.grounded) {
@@ -7611,13 +7945,13 @@ function stopNav() {
 }
 function startNav(dest, opts = {}) {
   if (!world.graph) buildRoadGraph(world);
-  const a = nearestNode(world, car.pos.x, car.pos.z), b = nearestNode(world, dest.x, dest.z, 400);
+  const a = nearestNode(world, car.pos.x, car.pos.z, 200, car.pos.y), b = nearestNode(world, dest.x, dest.z, 400);
   const path = a >= 0 && b >= 0 ? findPath(world, a, b) : null;
   if (!path) { if (!opts.quiet) toast('Aucun itinéraire trouvé', 1400); return false; }
   const G = world.graph;
   dest = { ...dest, x: G.X[b], z: G.Z[b] };                            // on vise le point de rue le plus proche (devant la porte)
-  nav.pts = path.map(id => [G.X[id], G.Z[id]]);
-  nav.pts.push([dest.x, dest.z]);
+  nav.pts = path.map(id => [G.X[id], G.Z[id], G.E[id]]);              // e : hauteur au-dessus du sol (ponts)
+  nav.pts.push([dest.x, dest.z, 0]);
   nav.cum = [0];
   for (let i = 1; i < nav.pts.length; i++) nav.cum.push(nav.cum[i - 1] + Math.hypot(nav.pts[i][0] - nav.pts[i - 1][0], nav.pts[i][1] - nav.pts[i - 1][1]));
   // virages : changement de cap de plus de 35° sur ~16 m
@@ -7635,7 +7969,7 @@ function startNav(dest, opts = {}) {
   }
   for (const t of nav.turns) {                                        // nom de la rue après le virage
     const q = nav.pts[Math.min(nav.pts.length - 1, t.k + 3)], r = nav.pts[Math.min(nav.pts.length - 1, t.k + 4)];
-    t.name = world.streetAt(q[0], q[1], r[0] - q[0], r[1] - q[1], '') || '';
+    t.name = world.streetAt(q[0], q[1], r[0] - q[0], r[1] - q[1], '', world.ground(q[0], q[1]) + q[2]) || '';
     t.dir = t.ang > 0 ? 'gauche' : 'droite';
   }
   nav.active = true; nav.dest = dest; nav.idx = 0; nav.off = 0; nav.timer = 0;
@@ -7698,7 +8032,7 @@ function updateNav(dt) {
     if (i % 2) continue;
     const [x, z] = P[i], [x2, z2] = P[i + 1];
     _pq4.setFromAxisAngle(Y_AXIS, Math.atan2(x2 - x, z2 - z) + Math.PI);
-    navArrows.setMatrixAt(n++, _pm4.compose(_pp4.set(x, world.ground(x, z) + 0.36, z), _pq4, _ps4.setScalar(1.3)));
+    navArrows.setMatrixAt(n++, _pm4.compose(_pp4.set(x, world.ground(x, z) + P[i][2] + 0.36, z), _pq4, _ps4.setScalar(1.3)));
   }
   navArrows.count = n;
   navArrows.instanceMatrix.needsUpdate = true;
@@ -7748,7 +8082,7 @@ function updateStreetSign(dt) {
   if (world.real && state !== 'menu') {
     const sp = Math.hypot(car.vx, car.vz);
     const hx = sp > 1.5 ? car.vx / sp : Math.sin(car.yaw), hz = sp > 1.5 ? car.vz / sp : Math.cos(car.yaw);
-    name = world.streetAt(car.pos.x, car.pos.z, hx, hz, streetShown);
+    name = world.streetAt(car.pos.x, car.pos.z, hx, hz, streetShown, car.pos.y);
   }
   if (name === streetCand) streetCandT += 0.1; else { streetCand = name; streetCandT = 0; }
   if (streetCand !== streetShown && streetCandT >= (streetCand ? 0.2 : 0.6)) { streetShown = streetCand; showStreet(streetShown); sayStreet(streetShown); }

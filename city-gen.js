@@ -9,6 +9,7 @@
 'use strict';
 
 const DEM_STEP = 30;       // m entre deux points d'altitude
+const VERSION = 3;         // cartes générées : on recalcule celles d'une version plus ancienne (2 : banlieue ; 3 : viaducs, échangeurs)
 const MASK_CELL = 3;       // m par cellule du masque eau / verdure
 const COIN_COUNT = 32;
 
@@ -117,6 +118,7 @@ function queries(A) {
     ['schools', '(way["amenity"~"^(school|college|university|kindergarten)$"];relation["amenity"~"^(school|college|university)$"];);out geom;'],
     ['landmarks', Array.isArray(A.landmarks) ? `nwr["name"~"${A.landmarks.map(l => l[1].source.replace(/[\^$]/g, '')).join('|')}"];out center tags;` : AUTO_LANDMARKS],
   );
+  if (A.suburbs) q.push(['parking', '(way["amenity"="parking"];relation["amenity"="parking"];);out geom;']);   // restent asphaltés
   if (A.shops) q.push(['shops', '(nwr["name"]["shop"];nwr["name"]["amenity"~"^(restaurant|cafe|bar|pub|fast_food|ice_cream|pharmacy|bank|cinema|theatre|nightclub)$"];);out center tags;']);
   q.push(
     ['addresses', 'nwr["addr:housenumber"]["addr:street"];out center tags;'],
@@ -301,6 +303,103 @@ async function compute(A, F, raw, log) {
     residential: [7.5, 1], unclassified: [7.5, 1], living_street: [6.5, 1],
     pedestrian: [6, 2], service: [5, 3],
   };
+  if (A.overpasses) Object.assign(DRIVE, { motorway: [11, 0], motorway_link: [7, 0] });   // autoroutes et bretelles
+  // ---------- Ponts, viaducs et échangeurs (cartes générées) : hauteur de chaque point de route au-dessus du sol.
+  // Un pont sous lequel passe une autre route est un tablier à 6,5 m par niveau (layer) ; les routes qui y mènent
+  // (rampes d'échangeur, approches) montent à 6 %. Les autres ponts (ruisseau, rivière) restent au ras du sol. ----------
+  const elev = new Map();                                              // id de voie → { pts, e : hauteur par point, bridge }
+  if (A.overpasses) {
+    const ways = [];
+    for (const w of roadsRaw.elements) {
+      const t = w.tags || {};
+      if (!DRIVE[t.highway] || t.area === 'yes' || t.tunnel === 'yes' || t.access === 'no') continue;
+      const pts = toXZ(w.geometry || []);
+      if (pts.length >= 2) ways.push({ w, pts, layer: parseInt(t.layer, 10) || 0, bridge: !!t.bridge && t.bridge !== 'no' });
+    }
+    const crosses = (ax, az, bx, bz, cx, cz, dx, dz) => {
+      const d = (bx - ax) * (dz - cz) - (bz - az) * (dx - cx);
+      if (Math.abs(d) < 1e-9) return false;
+      const t = ((cx - ax) * (dz - cz) - (cz - az) * (dx - cx)) / d, u = ((cx - ax) * (bz - az) - (cz - az) * (bx - ax)) / d;
+      return t > 0.001 && t < 0.999 && u > 0.001 && u < 0.999;
+    };
+    const sg = new Grid(40);
+    ways.forEach((o, wi) => { for (let k = 0; k < o.pts.length - 1; k++) { const [ax, az] = o.pts[k], [bx, bz] = o.pts[k + 1]; sg.add([wi, k], Math.min(ax, bx), Math.min(az, bz), Math.max(ax, bx), Math.max(az, bz)); } });
+    const raised = new Set();                                          // ponts qui enjambent une route au sol (ou un pont plus bas)
+    ways.forEach((o, wi) => {
+      if (!o.bridge) return;
+      for (let k = 0; k < o.pts.length - 1 && !raised.has(wi); k++) {
+        const [ax, az] = o.pts[k], [bx, bz] = o.pts[k + 1];
+        for (const [wj, kj] of sg.near((ax + bx) / 2, (az + bz) / 2, Math.hypot(bx - ax, bz - az) / 2 + 1)) {
+          const p = ways[wj];
+          if (wj === wi || (p.bridge && p.layer >= o.layer)) continue;
+          const [cx, cz] = p.pts[kj], [dx, dz] = p.pts[kj + 1];
+          if (crosses(ax, az, bx, bz, cx, cz, dx, dz)) { raised.add(wi); break; }
+        }
+      }
+    });
+    // réseau des points (un nœud OSM partagé = même point) ; les tabliers fixent leur hauteur, puis on la propage en rampe
+    const vid = new Map(), E = [], nbr = [];
+    const vert = (x, z) => {
+      const key = `${Math.round(x * 20)},${Math.round(z * 20)}`;
+      let id = vid.get(key);
+      if (id === undefined) { id = E.length; vid.set(key, id); E.push(0); nbr.push([]); }
+      return id;
+    };
+    ways.forEach((o, wi) => {
+      o.ids = o.pts.map(([x, z]) => vert(x, z));
+      const H = raised.has(wi) ? 6.5 * Math.max(1, o.layer) : 0;
+      o.ids.forEach((id, k) => {
+        if (H) E[id] = Math.max(E[id], H);
+        if (!k) return;
+        const d = Math.hypot(o.pts[k][0] - o.pts[k - 1][0], o.pts[k][1] - o.pts[k - 1][1]);
+        nbr[id].push([o.ids[k - 1], d]);
+        nbr[o.ids[k - 1]].push([id, d]);
+      });
+    });
+    const GRADE = 0.06, heap = [];                                     // file de priorité : le plus haut d'abord
+    const push = (e, id) => {
+      heap.push([e, id]);
+      for (let i = heap.length - 1; i > 0;) { const p = (i - 1) >> 1; if (heap[p][0] >= heap[i][0]) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; }
+    };
+    const pop = () => {
+      const top = heap[0], last = heap.pop();
+      if (heap.length) {
+        heap[0] = last;
+        for (let i = 0; ;) {
+          const l = 2 * i + 1, r = l + 1;
+          let m = i;
+          if (l < heap.length && heap[l][0] > heap[m][0]) m = l;
+          if (r < heap.length && heap[r][0] > heap[m][0]) m = r;
+          if (m === i) break;
+          [heap[m], heap[i]] = [heap[i], heap[m]];
+          i = m;
+        }
+      }
+      return top;
+    };
+    E.forEach((e, id) => { if (e > 0) push(e, id); });
+    while (heap.length) {
+      const [e0, u] = pop();
+      if (e0 < E[u]) continue;
+      for (const [v, d] of nbr[u]) { const e = E[u] - d * GRADE; if (e > E[v] + 0.01) { E[v] = e; push(e, v); } }
+    }
+    ways.forEach((o, wi) => {
+      const e = o.ids.map(id => E[id]);
+      if (e.some(v => v > 0.05)) elev.set(o.w.id, { pts: o.pts, e, bridge: raised.has(wi) });
+    });
+    await log(`  ${raised.size} ponts au-dessus d'une route, ${elev.size} voies surélevées (ponts, viaducs, rampes)`);
+  }
+  // hauteur d'une voie surélevée au point (x, z) : sur son segment le plus proche
+  const elevOn = (info, x, z) => {
+    let best = Infinity, e = 0;
+    for (let k = 0; k < info.pts.length - 1; k++) {
+      const [ax, az] = info.pts[k], [bx, bz] = info.pts[k + 1], dx = bx - ax, dz = bz - az;
+      const t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz || 1e-9)));
+      const d = Math.hypot(ax + dx * t - x, az + dz * t - z);
+      if (d < best) { best = d; e = info.e[k] + (info.e[k + 1] - info.e[k]) * t; }
+    }
+    return e;
+  };
   const roads = [];
   for (const w of roadsRaw.elements) {
     const t = w.tags || {};
@@ -310,9 +409,14 @@ async function compute(A, F, raw, log) {
     let width = spec[0];
     const lanes = parseInt(t.lanes, 10);
     if (lanes > 0 && spec[1] === 0) width = Math.min(14, lanes * 3.3 + 1);
+    const info = elev.get(w.id);
     for (const part of splitRegion(clipPolyline(toXZ(w.geometry || []), 20), KEEP)) {
-      const pts = simplify(part, 0.3);
-      if (pts.length >= 2) roads.push({ n: t.name || '', w: width, k: spec[1], p: pts });
+      const pts = info ? part : simplify(part, 0.3);                   // surélevée : on garde tous les points (le profil de la rampe)
+      if (pts.length < 2) continue;
+      const r = { n: t.name || '', w: width, k: spec[1], p: pts };
+      if (/^motorway/.test(t.highway)) r.x = 1;
+      if (info) { const e = pts.map(([x, z]) => elevOn(info, x, z)); if (e.some(v => v > 0.05)) { r.e = e; if (info.bridge) r.b = 1; } }
+      roads.push(r);
     }
   }
   if (!roads.some(r => r.k <= 1)) throw new Error('aucune rue où rouler dans ce rayon');
@@ -336,6 +440,7 @@ async function compute(A, F, raw, log) {
       if (isLane(t['cycleway:left'])) sides.push(-1);
       sides = [...new Set(sides)];
     }
+    if (elev.has(w.id)) sides = [];                                   // pas de bande peinte sur une rampe (elle serait au sol)
     if (!path && !sides.length) continue;
     let rw = spec ? spec[0] : 0;
     const lanes = parseInt(t.lanes, 10);
@@ -353,7 +458,7 @@ async function compute(A, F, raw, log) {
   const segs = [];
   const segGrid = new Grid(40);
   for (const r of roads) for (let k = 0; k < r.p.length - 1; k++) {
-    const s = { a: r.p[k], b: r.p[k + 1], w: r.w, n: r.n, k: r.k };
+    const s = { a: r.p[k], b: r.p[k + 1], w: r.w, n: r.n, k: r.k, el: !!r.e && Math.max(r.e[k], r.e[k + 1]) > 0.5, x: !!r.x };   // el : surélevé
     segs.push(s);
     segGrid.add(s, Math.min(s.a[0], s.b[0]), Math.min(s.a[1], s.b[1]), Math.max(s.a[0], s.b[0]), Math.max(s.a[1], s.b[1]));
   }
@@ -372,7 +477,7 @@ async function compute(A, F, raw, log) {
 
   // ---------- Bâtiments ----------
   const pickLevels = id => { let u = hash(id * 7 + 3); for (const [l, p] of A.levels) { if (u < p) return l; u -= p; } return A.levels[A.levels.length - 1][0]; };
-  const buildings = [];
+  const buildings = [], bTagged = [];                               // bTagged : hauteur ou étages donnés par OSM
   for (const el of buildingsRaw.elements) {
     const t = el.tags || {};
     for (let ring of polygonsOf(el)) {
@@ -409,6 +514,7 @@ async function compute(A, F, raw, log) {
       if (rs) b.rs = rs;
       if (t['roof:colour']) b.rc = t['roof:colour'];
       buildings.push(b);
+      bTagged.push(parseFloat(t.height) > 0 || parseFloat(t['building:levels']) > 0);
     }
   }
   const bRings = buildings.map(b => { const r = []; for (let k = 0; k < b.p.length; k += 2) r.push([b.p[k], b.p[k + 1]]); return r; });
@@ -572,7 +678,7 @@ async function compute(A, F, raw, log) {
       // ponts : la chaussée reste sur la terre ferme (une digue au ras de l'eau plutôt qu'une rue sous l'eau)
       for (const w of roadsRaw.elements) {
         const t = w.tags || {}, spec = DRIVE[t.highway];
-        if (!spec || t.bridge !== 'yes') continue;
+        if (!spec || t.bridge !== 'yes' || elev.has(w.id)) continue;          // pont surélevé : l'eau reste dessous
         const pts = toXZ(w.geometry || []), r = spec[0] / 2 + 1.5;
         for (let k = 0; k < pts.length - 1; k++) {
           const [ax, az] = pts[k], [bx, bz] = pts[k + 1], n = Math.ceil(Math.hypot(bx - ax, bz - az) / MASK_CELL) + 1;
@@ -590,6 +696,110 @@ async function compute(A, F, raw, log) {
       const hs = shore.map(k => demAt(mx0 + (k % mnx + 0.5) * MASK_CELL, mz0 + (((k / mnx) | 0) + 0.5) * MASK_CELL)).sort((p, q) => p - q);
       if (hs.length) waterLevel = round1(hs[Math.floor(hs.length * 0.1)] - 0.5);
     }
+  }
+  // ---------- Banlieue (cartes générées) : dans un secteur peu bâti, les petits bâtiments résidentiels sont des maisons
+  // (bungalow ou cottage : voir CityBatch.house dans le jeu) avec leur entrée asphaltée, et le terrain autour est gazonné ----------
+  if (A.suburbs) {
+    // part du sol couverte de bâtiments dans un carré de 90 m (cases de 10 m, tables des sommes cumulées) :
+    // ~0,2 en banlieue, ~0,45 dans un quartier de plex, plus au centre-ville. On ne compte que la surface où les
+    // bâtiments sont connus et où l'on peut bâtir (au-delà du territoire, il n'y en a pas, et un parc n'est pas un
+    // terrain vague : sinon tout paraîtrait peu bâti près du bord et au bord des parcs).
+    const C = 10, gnx = Math.ceil(mnx * MASK_CELL / C) + 1, gnz = Math.ceil(mnz * MASK_CELL / C) + 1, G1 = gnx + 1;
+    const built = new Float64Array(G1 * (gnz + 1)), known = new Float64Array(G1 * (gnz + 1));
+    bRings.forEach(r => {
+      const [x, z] = centroid(r), i = Math.floor((x - mx0) / C), j = Math.floor((z - mz0) / C);
+      if (i >= 0 && j >= 0 && i < gnx && j < gnz) built[(j + 1) * G1 + i + 1] += Math.abs(area(r));
+    });
+    for (let j = 0; j < gnz; j++) for (let i = 0; i < gnx; i++) {                 // terrain bâtissable : ni parc, ni eau
+      const x = mx0 + (i + 0.5) * C, z = mz0 + (j + 0.5) * C, mi = Math.floor((x - mx0) / MASK_CELL), mj = Math.floor((z - mz0) / MASK_CELL);
+      if (inRegion(x, z, KEEP - 10) && mi < mnx && mj < mnz && mask[mj * mnx + mi] === 0) known[(j + 1) * G1 + i + 1] = C * C;
+    }
+    for (const t of [built, known]) for (let j = 1; j <= gnz; j++) for (let i = 1; i <= gnx; i++) t[j * G1 + i] += t[(j - 1) * G1 + i] + t[j * G1 + i - 1] - t[(j - 1) * G1 + i - 1];
+    const box = (t, i0, i1, j0, j1) => t[(j1 + 1) * G1 + i1 + 1] - t[j0 * G1 + i1 + 1] - t[(j1 + 1) * G1 + i0] + t[j0 * G1 + i0];
+    const overall = box(built, 0, gnx - 1, 0, gnz - 1) / Math.max(1, box(known, 0, gnx - 1, 0, gnz - 1));
+    const coverage = (x, z) => {                                       // null : trop loin de tout bâtiment connu
+      const i = Math.floor((x - mx0) / C), j = Math.floor((z - mz0) / C);
+      const i0 = Math.max(0, i - 4), i1 = Math.min(gnx - 1, i + 4), j0 = Math.max(0, j - 4), j1 = Math.min(gnz - 1, j + 4);
+      if (i1 < i0 || j1 < j0) return null;
+      const k = box(known, i0, i1, j0, j1);
+      return k < 81 * C * C * 0.15 ? null : box(built, i0, i1, j0, j1) / k;
+    };
+    const SPARSE = 0.28, sparse = (x, z) => { const c = coverage(x, z); return (c === null ? overall : c) <= SPARSE; };
+    const street = s => s.k <= 1 && !s.el && !s.x;
+    let nh = 0, nd = 0;
+    buildings.forEach((b, i) => {
+      if ((b.t && b.t !== 'r') || b.n || b.rs === 'f' || b.rs === 'm') return;   // nommé (école, commerce…), toit plat ou mansardé
+      const r = bRings[i], a = Math.abs(area(r)), [cx, cz] = centroid(r);
+      if (a < 35 || a > 320 || !sparse(cx, cz)) return;
+      // étages : ceux d'OSM, sinon bungalow (plain-pied) ou cottage (deux étages) ; les grandes emprises sont plus souvent des bungalows
+      const lv = bTagged[i] ? Math.max(1, Math.min(3, b.l)) : hash(i * 31 + 7) < (a > 130 ? 0.6 : a > 95 ? 0.45 : 0.25) ? 1 : 2;
+      b.t = 'h';
+      b.l = lv;
+      if (!bTagged[i]) b.h = round1(0.5 + lv * 2.7 + 1.8);
+      if (!b.rs) b.rs = hash(i * 13 + 5) < 0.45 ? 'h' : 'g';
+      nh++;
+      // entrée asphaltée : de la rue jusqu'à la façade qui lui fait face, à un bout (garage) ou à côté de la maison
+      const nr = nearestRoad(cx, cz, street, 80);
+      if (!nr) return;
+      let best = null;
+      for (let k = 0; k < r.length; k++) {
+        const [ax, az] = r[k], [bx, bz] = r[(k + 1) % r.length], L = Math.hypot(bx - ax, bz - az);
+        if (L < 4) continue;
+        let nx = -(bz - az) / L, nz = (bx - ax) / L;
+        const mx = (ax + bx) / 2, mz = (az + bz) / 2;
+        if (pointInRing(mx + nx * 0.3, mz + nz * 0.3, r)) { nx = -nx; nz = -nz; }
+        const tx = nr.x - mx, tz = nr.z - mz, f = (tx * nx + tz * nz) / (Math.hypot(tx, tz) || 1);
+        if (f > 0.5 && (!best || f * Math.min(L, 12) > best.s)) best = { s: f * Math.min(L, 12), ax, az, bx, bz, L, nx, nz };
+      }
+      if (!best) return;
+      const garage = best.L >= 9 && hash(i * 5 + 3) < 0.6, end = hash(i * 7 + 1) < 0.5;
+      const ux = (best.bx - best.ax) / best.L, uz = (best.bz - best.az) / best.L, sg = end ? -1 : 1, off = garage ? 1.9 : -1.9;
+      const [kx, kz] = end ? [best.bx, best.bz] : [best.ax, best.az];
+      const hx = kx + ux * sg * off, hz = kz + uz * sg * off;
+      const rr = nearestRoad(hx + best.nx * 2, hz + best.nz * 2, street, 80);
+      if (!rr) return;
+      const dx = hx - rr.x, dz = hz - rr.z, dl = Math.hypot(dx, dz);
+      if (dl < rr.s.w / 2 + 1 || dl > 45) return;
+      const sx = rr.x + dx / dl * (rr.s.w / 2 - 0.3), sz = rr.z + dz / dl * (rr.s.w / 2 - 0.3);   // départ : le bord de la chaussée
+      for (let q = 0.05; q < 0.96; q += 0.05) {                       // ne traverse pas d'autre bâtiment
+        const x = sx + (hx - sx) * q, z = sz + (hz - sz) * q;
+        for (const j of bGrid.near(x, z, 2)) if (j !== i && pointInRing(x, z, bRings[j])) return;
+      }
+      b.dw = [round1(sx), round1(sz), round1(hx), round1(hz)];
+      if (garage) b.gar = 1;
+      nd++;
+    });
+    // pelouse partout où le secteur est peu bâti, sauf les rues (et un trottoir), les stationnements et les entrées
+    const paved = new Uint8Array(mnx * mnz);
+    const stamp = (x, z, rad) => {
+      const i0 = Math.max(0, Math.floor((x - rad - mx0) / MASK_CELL)), i1 = Math.min(mnx - 1, Math.floor((x + rad - mx0) / MASK_CELL));
+      const j0 = Math.max(0, Math.floor((z - rad - mz0) / MASK_CELL)), j1 = Math.min(mnz - 1, Math.floor((z + rad - mz0) / MASK_CELL));
+      for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+        if (Math.hypot(mx0 + (i + 0.5) * MASK_CELL - x, mz0 + (j + 0.5) * MASK_CELL - z) < rad) paved[j * mnx + i] = 1;
+      }
+    };
+    const stampLine = (ax, az, bx, bz, rad) => { const n = Math.ceil(Math.hypot(bx - ax, bz - az) / 1.5); for (let s = 0; s <= n; s++) stamp(ax + (bx - ax) * s / n, az + (bz - az) * s / n, rad); };
+    for (const r of roads) for (let k = 0; k < r.p.length - 1; k++) stampLine(r.p[k][0], r.p[k][1], r.p[k + 1][0], r.p[k + 1][1], r.w / 2 + 0.8);   // la chaussée et sa bordure
+    for (const b of buildings) {
+      if (!b.dw) continue;
+      const [sx, sz, hx, hz] = b.dw, L = Math.hypot(hx - sx, hz - sz) || 1, ex = b.gar ? 0 : 6;   // à côté de la maison : la place de stationnement
+      stampLine(sx, sz, hx + (hx - sx) / L * ex, hz + (hz - sz) / L * ex, 2);
+    }
+    for (const el of (raw.parking || empty).elements) for (const ring of polygonsOf(el)) {
+      let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+      for (const [x, z] of ring) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z); }
+      const i0 = Math.max(0, Math.floor((minX - mx0) / MASK_CELL)), i1 = Math.min(mnx - 1, Math.ceil((maxX - mx0) / MASK_CELL));
+      const j0 = Math.max(0, Math.floor((minZ - mz0) / MASK_CELL)), j1 = Math.min(mnz - 1, Math.ceil((maxZ - mz0) / MASK_CELL));
+      for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) if (pointInRing(mx0 + (i + 0.5) * MASK_CELL, mz0 + (j + 0.5) * MASK_CELL, ring)) paved[j * mnx + i] = 1;
+    }
+    let nl = 0;
+    for (let j = 0; j < mnz; j++) for (let i = 0; i < mnx; i++) {
+      const k = j * mnx + i;
+      if (mask[k] !== 0 || paved[k] || !sparse(mx0 + (i + 0.5) * MASK_CELL, mz0 + (j + 0.5) * MASK_CELL)) continue;
+      mask[k] = 2;
+      nl++;
+    }
+    await log(`  banlieue : ${nh} maisons (${nd} entrées asphaltées), ${(nl * MASK_CELL * MASK_CELL / 1e6).toFixed(2)} km² de pelouse`);
   }
   const rle = [];
   for (let k = 0; k < mask.length;) { let n = 1; while (k + n < mask.length && mask[k + n] === mask[k]) n++; rle.push(mask[k], n); k += n; }
@@ -626,7 +836,7 @@ async function compute(A, F, raw, log) {
 
   // ---------- Pièces : lieux célèbres, puis on complète le long des rues ----------
   const coins = [];
-  const drivable = s => s.k !== 3;
+  const drivable = s => s.k !== 3, onGround = s => drivable(s) && !s.el;   // pas de pièce sur un pont (elle flotterait dessous)
   const farFromCoins = (x, z, d) => coins.every(c => Math.hypot(c.x - x, c.z - z) >= d);
   const score = e => { const t = e.tags || {}; return (e.type !== 'node' ? 1 : 0) + (t.railway === 'station' || t.station === 'subway' || t.public_transport === 'station' ? 4 : 0) + (t.tourism || t.historic || t.leisure || t.amenity || t.building ? 2 : 0) - (t.highway ? 1 : 0); };
   const landmarks = [];
@@ -636,7 +846,7 @@ async function compute(A, F, raw, log) {
     if (!cands.length) continue;
     const [x, z] = proj(cands[0].lat, cands[0].lon);
     landmarks.push({ n: label, x: round1(x), z: round1(z) });
-    const nr = nearestRoad(x, z, drivable, 400);
+    const nr = nearestRoad(x, z, onGround, 400);
     const reach = (cands[0].e.tags || {}).leisure ? 350 : 150;
     if (!nr || nr.d > reach || !inRegion(nr.x, nr.z, -15) || !farFromCoins(nr.x, nr.z, 45) || coins.length >= COIN_COUNT - 4) continue;
     coins.push({ x: round1(nr.x), z: round1(nr.z), n: label });
@@ -662,7 +872,7 @@ async function compute(A, F, raw, log) {
   {
     const cands = [];
     for (const s of segs) {
-      if (!drivable(s)) continue;
+      if (!onGround(s)) continue;
       const L = Math.hypot(s.b[0] - s.a[0], s.b[1] - s.a[1]);
       for (let d = 5; d < L; d += 25) { const t = d / L; cands.push({ x: s.a[0] + (s.b[0] - s.a[0]) * t, z: s.a[1] + (s.b[1] - s.a[1]) * t, n: s.n }); }
     }
@@ -713,7 +923,7 @@ async function compute(A, F, raw, log) {
         if (pointInRing(x, z, r)) { bi = i; bd = 0; break; }
         for (let k = 0; k < r.length; k++) { const a = r[k], b = r[(k + 1) % r.length], d = segDist(x, z, a[0], a[1], b[0], b[1])[0]; if (d < bd) { bd = d; bi = i; } }
       }
-      if (bi < 0 || /^[pfc]$/.test(buildings[bi].t || '')) continue;
+      if (bi < 0 || /^[pfch]$/.test(buildings[bi].t || '')) continue;   // pas d'enseigne sur une maison de banlieue
       const nr = nearestRoad(x, z, drivable, 80);
       if (!nr || nr.d > 40) continue;
       const c = category(t);
@@ -823,7 +1033,7 @@ async function compute(A, F, raw, log) {
     const S = A.spawn;
     const near = S ? landmarks.find(l => l.n === S.near) || coins[0] : { x: 0, z: 0 };
     const toward = S && landmarks.find(l => l.n === S.toward);
-    const nr = nearestRoad(near.x, near.z, S ? s => S.road.test(s.n) : s => s.k === 0 && !!s.n, 800) || nearestRoad(near.x, near.z, drivable);
+    const nr = nearestRoad(near.x, near.z, S ? s => S.road.test(s.n) : s => s.k === 0 && !!s.n && !s.el && !s.x, 800) || nearestRoad(near.x, near.z, onGround);
     if (nr) {
       let dx = nr.s.b[0] - nr.s.a[0], dz = nr.s.b[1] - nr.s.a[1];
       const tx = toward ? toward.x - nr.x : 1, tz = toward ? toward.z - nr.z : 0;
@@ -840,7 +1050,7 @@ async function compute(A, F, raw, log) {
     dem: { x0: round1(dem.x0), z0: round1(dem.z0), nx: dem.nx, nz: dem.nz, step: dem.step, h: dem.h },
     mask: { x0: round1(mx0), z0: round1(mz0), nx: mnx, nz: mnz, cell: MASK_CELL, rle },
     waterLevel,
-    roads: roads.map(r => ({ n: r.n, w: r.w, k: r.k, p: flat(r.p) })),
+    roads: roads.map(r => ({ n: r.n, w: r.w, k: r.k, p: flat(r.p), ...(r.e ? { e: r.e.map(round1), ...(r.b ? { b: 1 } : {}) } : {}), ...(r.x ? { x: 1 } : {}) })),   // e : hauteur par point ; b : pont (vide dessous) ; x : autoroute
     buildings, walls, gates, trees, landmarks, coins, spawn,
     areas: areas.map(({ n, p }) => ({ n, p })),
     bikes,
@@ -882,7 +1092,9 @@ function liveArea(place, radius) {
   return {
     boundary: { drive: 12, keep: 120 }, lines: [ring],
     river: 'auto',
-    levels: [[1, 0.1], [2, 0.5], [3, 0.3], [4, 0.1]],   // étages quand OSM ne dit rien
+    levels: [[2, 0.35], [3, 0.5], [4, 0.15]],   // étages quand OSM ne dit rien (les maisons de banlieue ont les leurs)
+    suburbs: true,
+    overpasses: true,                                  // autoroutes, ponts, viaducs et échangeurs
     maxTrees: Math.round(Math.min(9000, 1000 * km2)),
     shops: Math.round(Math.min(700, 80 * km2)),
     landmarks: 'auto',
@@ -1041,6 +1253,7 @@ async function generate(query, radius, { status = () => {}, signal, referrer, lo
   const data = await compute(A, F, raw, msg => step(`Calcul de la carte : ${msg.trim()}`));
   data.attribution = 'Données © les contributeurs d\'OpenStreetMap (ODbL) · Relief : Terrain Tiles (AWS, Mapzen)';
   data.place = { name: place.name, label: place.label, lat: place.lat, lon: place.lon, radius };
+  data.version = VERSION;
   return data;
 }
 
@@ -1098,7 +1311,7 @@ function generateAsync(query, radius, opts = {}) {
   });
 }
 
-const CityGen = { DEM_STEP, queries, frame, compute, projection, liveArea, generate, generateAsync };
+const CityGen = { VERSION, DEM_STEP, queries, frame, compute, projection, liveArea, generate, generateAsync };
 root.CityGen = CityGen;
 if (typeof module === 'object' && module.exports) module.exports = CityGen;
 })(typeof window !== 'undefined' ? window : globalThis);
