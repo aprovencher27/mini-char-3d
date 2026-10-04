@@ -7103,11 +7103,11 @@ document.querySelectorAll('input[name="radius"]').forEach(r => r.addEventListene
 // ---------- Zone suivante : sur une carte générée, en s'approchant du bord, la zone d'à côté se prépare (Worker) ;
 // au bord, on y passe. Le char garde sa vraie position (lat/lon), sa vitesse et son cap ; chaque zone est une
 // nouvelle course (ses 32 pièces, le chrono repart). ----------
-const zones = { job: null, ready: null, entering: false, failT: 0, noteT: 0, note: '' };
+const zones = { job: null, ready: null, entering: false, retryAt: 0, noteAt: 0, note: '' };   // retryAt, noteAt : performance.now()
 function resetZones() {
   if (zones.job) zones.job.ac.abort();
   zones.job = zones.ready = null;
-  zones.failT = 0;
+  zones.retryAt = 0;
 }
 function startZone(key, lat, lon, R) {
   const job = { key, ac: new AbortController() };
@@ -7123,14 +7123,13 @@ function startZone(key, lat, lon, R) {
   })().catch(e => {
     if (zones.job !== job || e.name === 'AbortError') return;
     console.warn(e);
-    zones.failT = 30;
+    zones.retryAt = performance.now() + 30000;
     zones.note = `Zone suivante indisponible (${e.message}) : nouvel essai dans 30 s.`;
   }).finally(() => { if (zones.job === job) zones.job = null; });
 }
-function updateZones(dt) {
+function updateZones() {
   if (!world.geo || state === 'menu' || zones.entering || genAbort) return;
-  zones.failT -= dt;
-  const R = world.D.place.radius, [cx, cz] = world.zoneCenter;
+  const now = performance.now(), R = world.D.place.radius, [cx, cz] = world.zoneCenter;
   const ox = car.pos.x - cx, oz = car.pos.z - cz, d = Math.hypot(ox, oz) || 1, ux = ox / d, uz = oz / d;
   if (d < R * 0.55) return;
   // une zone convient si le point (x, z) y est à au moins m mètres de son bord
@@ -7138,14 +7137,14 @@ function updateZones(dt) {
   const r = zones.ready;
   if (r && d > R - 60 && fits(r.D, car.pos.x, car.pos.z, R * 0.3)) { enterZone(r); return; }
   // à préparer : centrée 1,2 R plus loin dans la direction du char, calée sur une grille de R/2 (on retombe sur le cache)
-  if (!zones.job && zones.failT <= 0 && !(r && fits(r.D, cx + ux * R, cz + uz * R, R * 0.3))) {
+  if (!zones.job && now >= zones.retryAt && !(r && fits(r.D, cx + ux * R, cz + uz * R, R * 0.3))) {
     const [tl, tn] = world.geo.unproj(cx + ux * R * 1.2, cz + uz * R * 1.2);
     const sl = R / 2 / 111132, sn = R / 2 / (111320 * Math.cos(tl * Math.PI / 180));
     const lat = Math.round(tl / sl) * sl, lon = Math.round(tn / sn) * sn;
     startZone(`zone|${lat.toFixed(5)}|${lon.toFixed(5)}|${R}`, lat, lon, R);
   }
   // au bord, en attendant : où en est la zone suivante
-  if (d > R - 80 && (zones.noteT -= dt) <= 0) { zones.noteT = 1.5; toast(zones.note || 'Préparation de la zone suivante…', 1700); }
+  if (d > R - 80 && now >= zones.noteAt) { zones.noteAt = now + 1500; toast(zones.note || 'Préparation de la zone suivante…', 1700); }
 }
 async function enterZone(z) {
   zones.entering = true;
@@ -7778,7 +7777,7 @@ function frame() {
   updateRadars(dt);
   updatePeds(dt, t);
   updateFlyers(dt);
-  updateZones(dt);
+  updateZones();
   updateCamera(dt, t);
   updateWorld(dt);
   updateAudio(inp, drifting);
