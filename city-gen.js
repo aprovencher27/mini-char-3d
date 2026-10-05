@@ -9,7 +9,7 @@
 'use strict';
 
 const DEM_STEP = 30;       // m entre deux points d'altitude
-const VERSION = 6;         // cartes générées : on recalcule celles d'une version plus ancienne (2 : banlieue ; 3 : viaducs ; 4 : plex ; 5 : commerces ; 6 : voies ferrées)
+const VERSION = 7;         // cartes générées : on recalcule celles d'une version plus ancienne (2 : banlieue ; 3 : viaducs ; 4 : plex ; 5 : commerces ; 6 : voies ferrées ; 7 : passages inférieurs)
 const MASK_CELL = 3;       // m par cellule du masque eau / verdure
 const COIN_COUNT = 32;
 
@@ -305,57 +305,89 @@ async function compute(A, F, raw, log) {
     pedestrian: [6, 2], service: [5, 3],
   };
   if (A.overpasses) Object.assign(DRIVE, { motorway: [11, 0], motorway_link: [7, 0] });   // autoroutes et bretelles
-  // ---------- Ponts, viaducs et échangeurs (cartes générées) : hauteur de chaque point de route (et de voie ferrée)
-  // au-dessus du sol. Un pont sous lequel passe une route ou une voie ferrée est un tablier à 6,5 m par niveau (layer) ;
-  // ce qui y mène monte en rampe : 6 % pour une route (bretelles, approches), 2,5 % pour un chemin de fer (remblai).
-  // Les autres ponts (ruisseau, rivière) restent au ras du sol. Routes et rails ont chacun leur réseau : un passage
-  // à niveau ne soulève pas l'un avec l'autre. ----------
-  const elev = new Map(), railElev = new Map();                        // id de voie → { pts, e : hauteur par point, bridge }
+  // ---------- Ponts, viaducs, passages inférieurs (cartes générées) : hauteur de chaque point de route (et de voie
+  // ferrée) par rapport au sol. OSM dit qui passe au-dessus (bridge, layer) mais pas à quelle altitude ; on décide
+  // qui bouge à chaque croisement :
+  //   - la voie du dessous plonge si OSM le laisse entendre : hauteur libre affichée (maxheight), niveau négatif,
+  //     petit tunnel, tranchée (cutting) ;
+  //   - sinon le pont monte s'il est long, sur remblai ou en viaduc ;
+  //   - sinon, sous un pont ferroviaire court, c'est la rue qui plonge (une voie ferrée change peu de niveau) ;
+  //   - sinon le pont monte.
+  // Un pont qui monte : tablier à 6,5 m par niveau, les approches en rampe (6 % ; 2,5 % pour un chemin de fer).
+  // Une voie qui plonge : 5,5 m sous le pont, en rampe (8 % ; 2,5 %) ; le jeu creuse le sol (passage inférieur).
+  // Routes et rails ont chacun leur réseau : un passage à niveau ne soulève (ni n'enfonce) pas l'un avec l'autre.
+  // Les autres ponts (ruisseau, rivière) restent au ras du sol. ----------
+  const elev = new Map(), railElev = new Map();                        // id de voie → { pts, e : hauteur par point (< 0 : creusé), bridge, spans }
   const RAIL = /^(rail|light_rail|narrow_gauge|tram)$/;
+  const lengthOf = pts => pts.reduce((s, p, i) => s + (i ? Math.hypot(p[0] - pts[i - 1][0], p[1] - pts[i - 1][1]) : 0), 0);
+  const shortTunnel = (t, w) => A.overpasses && t.tunnel === 'yes' && lengthOf(toXZ(w.geometry || [])) < 150;   // passage sous une voie ferrée, sous un bâtiment
   if (A.overpasses) {
     const isBridge = t => !!t.bridge && t.bridge !== 'no';
+    // points tous les 8 m au plus (les nœuds OSM d'origine restent : c'est par eux que les voies se rejoignent)
+    const dense = pts => {
+      const out = [pts[0]];
+      for (let i = 1; i < pts.length; i++) {
+        const [ax, az] = pts[i - 1], [bx, bz] = pts[i], n = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / 8));
+        for (let k = 1; k <= n; k++) out.push(k === n ? pts[i] : [ax + (bx - ax) * k / n, az + (bz - az) * k / n]);
+      }
+      return out;
+    };
+    const wayOf = (w, t, rail) => {
+      const pts = toXZ(w.geometry || []), layer = parseInt(t.layer, 10) || 0, tunnel = !rail && shortTunnel(t, w);
+      return {
+        w, rail, pts: dense(pts), raw: pts, layer, len: lengthOf(pts), bridge: isBridge(t), motorway: /^motorway/.test(t.highway || ''),
+        sink: tunnel || t.cutting === 'yes',                           // toute la voie plonge
+        under: !!t.maxheight || layer < 0 || tunnel || t.cutting === 'yes',   // elle passe sous quelque chose
+        up: t.embankment === 'yes' || t.bridge === 'viaduct',
+      };
+    };
     const roadWays = [], railWays = [];
     for (const w of roadsRaw.elements) {
       const t = w.tags || {};
-      if (!DRIVE[t.highway] || t.area === 'yes' || t.tunnel === 'yes' || t.access === 'no') continue;
-      const pts = toXZ(w.geometry || []);
-      if (pts.length >= 2) roadWays.push({ w, pts, layer: parseInt(t.layer, 10) || 0, bridge: isBridge(t) });
+      if (!DRIVE[t.highway] || t.area === 'yes' || (t.tunnel === 'yes' && !shortTunnel(t, w)) || t.access === 'no') continue;
+      if ((w.geometry || []).length >= 2) roadWays.push(wayOf(w, t, false));
     }
     for (const w of (raw.rails || empty).elements) {
       const t = w.tags || {};
       if (!RAIL.test(t.railway || '') || t.tunnel === 'yes') continue;
-      const pts = toXZ(w.geometry || []);
-      if (pts.length >= 2) railWays.push({ w, pts, layer: parseInt(t.layer, 10) || 0, bridge: isBridge(t) });
+      if ((w.geometry || []).length >= 2) railWays.push(wayOf(w, t, true));
     }
     const all = roadWays.concat(railWays);
-    const crosses = (ax, az, bx, bz, cx, cz, dx, dz) => {
+    const hit = (ax, az, bx, bz, cx, cz, dx, dz) => {
       const d = (bx - ax) * (dz - cz) - (bz - az) * (dx - cx);
-      if (Math.abs(d) < 1e-9) return false;
+      if (Math.abs(d) < 1e-9) return null;
       const t = ((cx - ax) * (dz - cz) - (cz - az) * (dx - cx)) / d, u = ((cx - ax) * (bz - az) - (cz - az) * (bx - ax)) / d;
-      return t > 0.001 && t < 0.999 && u > 0.001 && u < 0.999;
+      return t > 0.001 && t < 0.999 && u > 0.001 && u < 0.999 ? [ax + (bx - ax) * t, az + (bz - az) * t] : null;
     };
     const sg = new Grid(40);
-    all.forEach((o, wi) => { for (let k = 0; k < o.pts.length - 1; k++) { const [ax, az] = o.pts[k], [bx, bz] = o.pts[k + 1]; sg.add([wi, k], Math.min(ax, bx), Math.min(az, bz), Math.max(ax, bx), Math.max(az, bz)); } });
-    const raised = new Set();                                          // ponts qui enjambent une route ou une voie ferrée (au sol, ou sur un pont plus bas)
+    all.forEach((o, wi) => { for (let k = 0; k < o.raw.length - 1; k++) { const [ax, az] = o.raw[k], [bx, bz] = o.raw[k + 1]; sg.add([wi, k], Math.min(ax, bx), Math.min(az, bz), Math.max(ax, bx), Math.max(az, bz)); } });
+    const raised = new Set(), sinks = [];                               // ponts qui montent ; voies qui plongent (où, et sous quoi)
     all.forEach((o, wi) => {
       if (!o.bridge) return;
-      for (let k = 0; k < o.pts.length - 1 && !raised.has(o); k++) {
-        const [ax, az] = o.pts[k], [bx, bz] = o.pts[k + 1];
+      const seen = new Set();
+      for (let k = 0; k < o.raw.length - 1; k++) {
+        const [ax, az] = o.raw[k], [bx, bz] = o.raw[k + 1];
         for (const [wj, kj] of sg.near((ax + bx) / 2, (az + bz) / 2, Math.hypot(bx - ax, bz - az) / 2 + 1)) {
           const p = all[wj];
-          if (wj === wi || (p.bridge && p.layer >= o.layer)) continue;
-          const [cx, cz] = p.pts[kj], [dx, dz] = p.pts[kj + 1];
-          if (crosses(ax, az, bx, bz, cx, cz, dx, dz)) { raised.add(o); break; }
+          if (wj === wi || seen.has(wj) || (p.bridge && p.layer >= o.layer)) continue;
+          const [cx, cz] = p.raw[kj], [dx, dz] = p.raw[kj + 1], at = hit(ax, az, bx, bz, cx, cz, dx, dz);
+          if (!at) continue;
+          seen.add(wj);
+          // tranchée, tunnel, niveau négatif : la voie du dessous plonge toujours ; hauteur libre affichée ou pont
+          // ferroviaire au-dessus d'une rue : seulement sous un pont court (pas sous un viaduc, ni une autoroute)
+          const short = !(o.len > 80 || o.up || o.motorway);
+          if (p.sink || p.layer < 0 || (short && (p.under || (o.rail && !p.rail)))) { sinks.push({ way: p, x: at[0], z: at[1], r: 12 }); o.spans = true; }
+          else raised.add(o);
         }
       }
     });
-    // un réseau (un nœud OSM partagé = même point) : les tabliers fixent leur hauteur, puis on la propage en rampe
-    const solve = (ways, grade, out) => {
-      const vid = new Map(), E = [], nbr = [];
+    // un réseau : on fixe les hauteurs (tabliers) et les profondeurs (sous les ponts), puis on les propage en rampe
+    const solve = (ways, upGrade, downGrade, out) => {
+      const vid = new Map(), E = [], Dp = [], nbr = [];
       const vert = (x, z) => {
         const key = `${Math.round(x * 20)},${Math.round(z * 20)}`;
         let id = vid.get(key);
-        if (id === undefined) { id = E.length; vid.set(key, id); E.push(0); nbr.push([]); }
+        if (id === undefined) { id = E.length; vid.set(key, id); E.push(0); Dp.push(0); nbr.push([]); }
         return id;
       };
       for (const o of ways) {
@@ -363,47 +395,54 @@ async function compute(A, F, raw, log) {
         const H = raised.has(o) ? 6.5 * Math.max(1, o.layer) : 0;
         o.ids.forEach((id, k) => {
           if (H) E[id] = Math.max(E[id], H);
+          if (o.sink) Dp[id] = Math.max(Dp[id], 5.5);
           if (!k) return;
           const d = Math.hypot(o.pts[k][0] - o.pts[k - 1][0], o.pts[k][1] - o.pts[k - 1][1]);
           nbr[id].push([o.ids[k - 1], d]);
           nbr[o.ids[k - 1]].push([id, d]);
         });
       }
-      const heap = [];                                                 // file de priorité : le plus haut d'abord
-      const push = (e, id) => {
-        heap.push([e, id]);
-        for (let i = heap.length - 1; i > 0;) { const p = (i - 1) >> 1; if (heap[p][0] >= heap[i][0]) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; }
-      };
-      const pop = () => {
-        const top = heap[0], last = heap.pop();
-        if (heap.length) {
-          heap[0] = last;
-          for (let i = 0; ;) {
-            const l = 2 * i + 1, r = l + 1;
-            let m = i;
-            if (l < heap.length && heap[l][0] > heap[m][0]) m = l;
-            if (r < heap.length && heap[r][0] > heap[m][0]) m = r;
-            if (m === i) break;
-            [heap[m], heap[i]] = [heap[i], heap[m]];
-            i = m;
+      for (const s of sinks) if (ways.includes(s.way)) s.way.pts.forEach(([x, z], k) => { if (Math.hypot(x - s.x, z - s.z) <= s.r) Dp[s.way.ids[k]] = Math.max(Dp[s.way.ids[k]], 5.5); });
+      const spread = (V, grade) => {                                    // file de priorité : le plus haut (ou le plus profond) d'abord
+        const heap = [];
+        const push = (e, id) => {
+          heap.push([e, id]);
+          for (let i = heap.length - 1; i > 0;) { const p = (i - 1) >> 1; if (heap[p][0] >= heap[i][0]) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; }
+        };
+        const pop = () => {
+          const top = heap[0], last = heap.pop();
+          if (heap.length) {
+            heap[0] = last;
+            for (let i = 0; ;) {
+              const l = 2 * i + 1, r = l + 1;
+              let m = i;
+              if (l < heap.length && heap[l][0] > heap[m][0]) m = l;
+              if (r < heap.length && heap[r][0] > heap[m][0]) m = r;
+              if (m === i) break;
+              [heap[m], heap[i]] = [heap[i], heap[m]];
+              i = m;
+            }
           }
+          return top;
+        };
+        V.forEach((e, id) => { if (e > 0) push(e, id); });
+        while (heap.length) {
+          const [e0, u] = pop();
+          if (e0 < V[u]) continue;
+          for (const [v, d] of nbr[u]) { const e = V[u] - d * grade; if (e > V[v] + 0.01) { V[v] = e; push(e, v); } }
         }
-        return top;
       };
-      E.forEach((e, id) => { if (e > 0) push(e, id); });
-      while (heap.length) {
-        const [e0, u] = pop();
-        if (e0 < E[u]) continue;
-        for (const [v, d] of nbr[u]) { const e = E[u] - d * grade; if (e > E[v] + 0.01) { E[v] = e; push(e, v); } }
-      }
+      spread(E, upGrade);
+      spread(Dp, downGrade);
       for (const o of ways) {
-        const e = o.ids.map(id => E[id]);
-        if (e.some(v => v > 0.05)) out.set(o.w.id, { pts: o.pts, e, bridge: raised.has(o) });
+        const e = o.ids.map(id => E[id] - Dp[id]);
+        if (e.some(v => Math.abs(v) > 0.05)) out.set(o.w.id, { pts: o.pts, e, bridge: raised.has(o) });
+        if (o.spans) out.set(o.w.id, { ...(out.get(o.w.id) || { pts: o.pts, e: o.pts.map(() => 0), bridge: false }), spans: true });
       }
     };
-    solve(roadWays, 0.06, elev);
-    solve(railWays, 0.025, railElev);
-    await log(`  ${raised.size} ponts au-dessus d'une route ou d'une voie ferrée, ${elev.size} routes et ${railElev.size} voies ferrées surélevées`);
+    solve(roadWays, 0.06, 0.08, elev);
+    solve(railWays, 0.025, 0.025, railElev);
+    await log(`  ${raised.size} ponts qui montent, ${sinks.length} passages inférieurs ; ${elev.size} routes et ${railElev.size} voies ferrées hors du sol`);
   }
   // hauteur d'une voie surélevée au point (x, z) : sur son segment le plus proche
   const elevOn = (info, x, z) => {
@@ -420,7 +459,7 @@ async function compute(A, F, raw, log) {
   for (const w of roadsRaw.elements) {
     const t = w.tags || {};
     const spec = DRIVE[t.highway];
-    if (!spec || t.area === 'yes' || t.tunnel === 'yes' || t.access === 'no') continue;
+    if (!spec || t.area === 'yes' || (t.tunnel === 'yes' && !shortTunnel(t, w)) || t.access === 'no') continue;
     if (t.highway === 'service' && /parking_aisle|driveway|drive-through/.test(t.service || '')) continue;
     let width = spec[0];
     const lanes = parseInt(t.lanes, 10);
@@ -431,7 +470,7 @@ async function compute(A, F, raw, log) {
       if (pts.length < 2) continue;
       const r = { n: t.name || '', w: width, k: spec[1], p: pts };
       if (/^motorway/.test(t.highway)) r.x = 1;
-      if (info) { const e = pts.map(([x, z]) => elevOn(info, x, z)); if (e.some(v => v > 0.05)) { r.e = e; if (info.bridge) r.b = 1; } }
+      if (info) { const e = pts.map(([x, z]) => elevOn(info, x, z)); if (e.some(v => Math.abs(v) > 0.05)) { r.e = e; if (info.bridge) r.b = 1; } if (info.spans) r.g = 1; }
       roads.push(r);
     }
   }
@@ -479,7 +518,7 @@ async function compute(A, F, raw, log) {
       const pts = info ? part : simplify(part, 0.3);
       if (pts.length < 2) continue;
       const r = { p: pts };
-      if (info) { const e = pts.map(([x, z]) => elevOn(info, x, z)); if (e.some(v => v > 0.05)) { r.e = e; if (info.bridge) r.b = 1; } }
+      if (info) { const e = pts.map(([x, z]) => elevOn(info, x, z)); if (e.some(v => Math.abs(v) > 0.05)) { r.e = e; if (info.bridge) r.b = 1; } if (info.spans) r.g = 1; }
       rails.push(r);
     }
   }
@@ -488,7 +527,7 @@ async function compute(A, F, raw, log) {
   const segs = [];
   const segGrid = new Grid(40);
   for (const r of roads) for (let k = 0; k < r.p.length - 1; k++) {
-    const s = { a: r.p[k], b: r.p[k + 1], w: r.w, n: r.n, k: r.k, el: !!r.e && Math.max(r.e[k], r.e[k + 1]) > 0.5, x: !!r.x };   // el : surélevé
+    const s = { a: r.p[k], b: r.p[k + 1], w: r.w, n: r.n, k: r.k, el: (!!r.e && Math.max(r.e[k], r.e[k + 1]) > 0.5) || !!r.g, low: !!r.e && Math.min(r.e[k], r.e[k + 1]) < -0.5, x: !!r.x };   // el : sur un pont ; low : dans un passage inférieur
     segs.push(s);
     segGrid.add(s, Math.min(s.a[0], s.b[0]), Math.min(s.a[1], s.b[1]), Math.max(s.a[0], s.b[0]), Math.max(s.a[1], s.b[1]));
   }
@@ -755,7 +794,7 @@ async function compute(A, F, raw, log) {
       return k < 81 * C * C * 0.15 ? null : box(built, i0, i1, j0, j1) / k;
     };
     const SPARSE = 0.28, sparse = (x, z) => { const c = coverage(x, z); return (c === null ? overall : c) <= SPARSE; };
-    const street = s => s.k <= 1 && !s.el && !s.x;
+    const street = s => s.k <= 1 && !s.el && !s.low && !s.x;
     let nh = 0, nd = 0;
     buildings.forEach((b, i) => {
       if ((b.t && b.t !== 'r') || b.n || b.rs === 'f' || b.rs === 'm') return;   // nommé (école, commerce…), toit plat ou mansardé
@@ -1079,7 +1118,7 @@ async function compute(A, F, raw, log) {
     const S = A.spawn;
     const near = S ? landmarks.find(l => l.n === S.near) || coins[0] : { x: 0, z: 0 };
     const toward = S && landmarks.find(l => l.n === S.toward);
-    const nr = nearestRoad(near.x, near.z, S ? s => S.road.test(s.n) : s => s.k === 0 && !!s.n && !s.el && !s.x, 800) || nearestRoad(near.x, near.z, onGround);
+    const nr = nearestRoad(near.x, near.z, S ? s => S.road.test(s.n) : s => s.k === 0 && !!s.n && !s.el && !s.low && !s.x, 800) || nearestRoad(near.x, near.z, onGround);
     if (nr) {
       let dx = nr.s.b[0] - nr.s.a[0], dz = nr.s.b[1] - nr.s.a[1];
       const tx = toward ? toward.x - nr.x : 1, tz = toward ? toward.z - nr.z : 0;
@@ -1096,11 +1135,11 @@ async function compute(A, F, raw, log) {
     dem: { x0: round1(dem.x0), z0: round1(dem.z0), nx: dem.nx, nz: dem.nz, step: dem.step, h: dem.h },
     mask: { x0: round1(mx0), z0: round1(mz0), nx: mnx, nz: mnz, cell: MASK_CELL, rle },
     waterLevel,
-    roads: roads.map(r => ({ n: r.n, w: r.w, k: r.k, p: flat(r.p), ...(r.e ? { e: r.e.map(round1), ...(r.b ? { b: 1 } : {}) } : {}), ...(r.x ? { x: 1 } : {}) })),   // e : hauteur par point ; b : pont (vide dessous) ; x : autoroute
+    roads: roads.map(r => ({ n: r.n, w: r.w, k: r.k, p: flat(r.p), ...(r.e ? { e: r.e.map(round1), ...(r.b ? { b: 1 } : {}) } : {}), ...(r.g ? { g: 1 } : {}), ...(r.x ? { x: 1 } : {}) })),   // e : hauteur par point (< 0 : creusé) ; b : pont (vide dessous) ; g : pont au ras du sol au-dessus d'un passage inférieur ; x : autoroute
     buildings, walls, gates, trees, landmarks, coins, spawn,
     areas: areas.map(({ n, p }) => ({ n, p })),
     bikes,
-    ...(rails.length ? { rails: rails.map(r => ({ p: flat(r.p), ...(r.e ? { e: r.e.map(round1), ...(r.b ? { b: 1 } : {}) } : {}) })) } : {}),
+    ...(rails.length ? { rails: rails.map(r => ({ p: flat(r.p), ...(r.e ? { e: r.e.map(round1), ...(r.b ? { b: 1 } : {}) } : {}), ...(r.g ? { g: 1 } : {}) })) } : {}),
     shops: shops.map(s => ({ n: s.n, c: s.c, b: s.b, x: round1(s.x), z: round1(s.z) })),
     addr, statues, sports,
     limit: limit ? flat(limit) : null,

@@ -1705,6 +1705,157 @@ function deckRibbon(A, points, width, lift, heightAt, uLen) {
   }
   for (let i = 0; i < n - 1; i++) { const k = base + i * 2; A.idx.push(k, k + 1, k + 2, k + 1, k + 3, k + 2); }
 }
+// Passages inférieurs (cartes générées) : une route (ou une voie ferrée) qui plonge sous un pont creuse le sol.
+// Fond plat sur sa largeur, bordé d'un mur de soutènement épais (addTrenchWalls) : derrière, le sol d'origine, sans
+// talus. Deux chaussées parallèles et proches (boulevard à terre-plein) partagent le même creux, séparées par un muret.
+// W.terrain0 : le sol d'origine, W.cutAt : la profondeur creusée. Le maillage du sol (W.terrainMesh) creuse un peu
+// plus loin que le sol « physique » : un triangle à cheval sur la marche ne dépasse ainsi jamais devant le mur ; le
+// dessus du mur, assez large, cache le reste.
+function carveUnderpasses(W, D) {
+  const T0 = W.terrain, cuts = new Grid(24), list = [];
+  W.terrain0 = T0;
+  D.roads.concat((D.rails || []).map(r => ({ ...r, w: 4 }))).forEach((r, ri) => {
+    if (!r.e || !r.e.some(v => v < -0.05)) return;
+    const P = densifyE(ringOf(r.p), r.e, 2), hw = r.w / 2 + 0.4;
+    for (let k = 0; k < P.length - 1; k++) {
+      const [ax, az, ea] = P[k], [bx, bz, eb] = P[k + 1], L = Math.hypot(bx - ax, bz - az);
+      if ((ea > -0.05 && eb > -0.05) || L < 0.01) continue;
+      const s = { ax, az, bx, bz, ux: (bx - ax) / L, uz: (bz - az) / L, L, da: Math.max(0, -ea), db: Math.max(0, -eb), hw, r: ri };
+      const m = hw + TRENCH.median + 1;
+      cuts.add(s, Math.min(ax, bx) - m, Math.min(az, bz) - m, Math.max(ax, bx) + m, Math.max(az, bz) + m);
+      W.fineGround.push([Math.min(ax, bx) - m, Math.max(ax, bx) + m, Math.min(az, bz) - m, Math.max(az, bz) + m, 2]);   // sol remaillé au demi-mètre
+      list.push(s);
+    }
+  });
+  if (!list.length) return;
+  W.cuts = list;
+  // pour chaque voie, son segment le plus proche ; fond plat jusqu'au dos du mur (ou jusqu'au milieu du terre-plein)
+  // + reach, puis à pic. skip : sans cette voie ; reach < 0 : la chaussée seule
+  const nearest = new Map();
+  const cut = (x, z, skip, reach) => {
+    nearest.clear();
+    for (const s of cuts.at(x, z)) {
+      if (s.r === skip) continue;
+      const t = clamp((x - s.ax) * s.ux + (z - s.az) * s.uz, 0, s.L), px = x - s.ax - s.ux * t, pz = z - s.az - s.uz * t;
+      const d = Math.hypot(px, pz), m = nearest.get(s.r);
+      if (!m || d < m.d) nearest.set(s.r, { s, d, t: t / s.L, side: s.ux * pz - s.uz * px > 0 ? 1 : 0 });
+    }
+    let best = 0;
+    for (const { s, d, t, side } of nearest.values()) {
+      const flat = reach < 0 ? s.hw : s.hw + (s.ext ? s.ext[side] : TRENCH.wall) + reach;
+      if (d < flat + 0.05) best = Math.max(best, (s.da + (s.db - s.da) * t) * (d <= flat ? 1 : 1 - (d - flat) / 0.05));
+    }
+    return best;
+  };
+  // de chaque côté de chaque segment, la chaussée creusée voisine la plus proche : parallèle et à moins de
+  // TRENCH.median m, même creux (chaque chaussée creuse aussi le terre-plein et l'autre chaussée : le fond du creux est
+  // partout au plus profond des deux ; muret au milieu) ; tout près, même creux sans muret (carrefour) ; sinon un mur,
+  // dont le dessus s'arrête avant l'autre creux
+  for (const s of list) {
+    const nx = -s.uz, nz = s.ux, mx = (s.ax + s.bx) / 2, mz = (s.az + s.bz) / 2;
+    s.ext = [TRENCH.wall, TRENCH.wall]; s.cap = [Infinity, Infinity]; s.mid = [null, null]; s.join = [false, false];
+    for (const sg of [-1, 1]) {
+      const i = sg > 0 ? 1 : 0;
+      for (let g = 0.1; g <= TRENCH.median; g += 0.1) {
+        const x = mx + nx * sg * (s.hw + g), z = mz + nz * sg * (s.hw + g);
+        const o = cuts.at(x, z).find(o => o.r !== s.r && Math.hypot(x - o.ax - o.ux * clamp((x - o.ax) * o.ux + (z - o.az) * o.uz, 0, o.L), z - o.az - o.uz * clamp((x - o.ax) * o.ux + (z - o.az) * o.uz, 0, o.L)) <= o.hw);
+        if (!o) continue;
+        const parallel = Math.abs(o.ux * s.ux + o.uz * s.uz) > 0.95;
+        if (parallel) { s.ext[i] = g + 2 * o.hw; s.join[i] = true; if (g > 0.8) s.mid[i] = { g, r: o.r }; }
+        else if (g <= 2 * TRENCH.wall) { s.ext[i] = g / 2 + 0.05; s.join[i] = true; }
+        else s.cap[i] = g;                                                 // l'autre creux, à g m du bord de la chaussée
+        break;
+      }
+    }
+  }
+  // une piste cyclable qui longe la rue de près descend avec elle : le mur recule derrière la piste
+  const bikes = new Grid(24);
+  for (const b of D.bikes || []) if (b.k === 0) {
+    const pts = ringOf(b.p);
+    for (let k = 0; k < pts.length - 1; k++) {
+      const [ax, az] = pts[k], [bx, bz] = pts[k + 1], L = Math.hypot(bx - ax, bz - az);
+      if (L > 0.01) bikes.add({ ax, az, ux: (bx - ax) / L, uz: (bz - az) / L, L, hw: b.w / 2 }, Math.min(ax, bx) - 12, Math.min(az, bz) - 12, Math.max(ax, bx) + 12, Math.max(az, bz) + 12);
+    }
+  }
+  for (const s of list) {
+    const nx = -s.uz, nz = s.ux, mx = (s.ax + s.bx) / 2, mz = (s.az + s.bz) / 2;
+    s.wallAt = [s.hw, s.hw];                                            // le mur, à cette distance de l'axe de la rue
+    for (const b of bikes.at(mx, mz)) {
+      if (Math.abs(b.ux * s.ux + b.uz * s.uz) < 0.9) continue;
+      const t = (mx - b.ax) * b.ux + (mz - b.az) * b.uz;
+      if (t < -1 || t > b.L + 1) continue;
+      const lat = (b.ax + b.ux * t - mx) * nx + (b.az + b.uz * t - mz) * nz, i = lat > 0 ? 1 : 0;
+      if (s.join[i] || Math.abs(lat) - b.hw > s.hw + TRENCH.wall + 1) continue;
+      s.wallAt[i] = Math.max(s.wallAt[i], Math.abs(lat) + b.hw + 0.3);
+    }
+    for (const i of [0, 1]) if (!s.join[i]) {
+      s.ext[i] = s.wallAt[i] - s.hw + TRENCH.wall;
+      s.cap[i] = Math.min(TRENCH.cap, s.cap[i] - (s.wallAt[i] - s.hw) - 0.05);   // le dessus du mur s'arrête avant l'autre creux
+    }
+  }
+  W.cutAt = (x, z, skip) => cut(x, z, skip, 0);
+  W.terrain = (x, z) => T0(x, z) - cut(x, z, -1, 0);
+  W.terrainMesh = (x, z) => T0(x, z) - cut(x, z, -1, TRENCH.reach);
+}
+// wall : épaisseur du mur ; reach : portée d'un triangle du maillage au demi-mètre (sa diagonale) ; cap : largeur du
+// dessus du mur, qui couvre le creux du maillage (épaisseur et deux portées) ; median : terre-plein le plus large
+// qu'on creuse avec les deux chaussées
+const TRENCH = { wall: 0.6, reach: 0.75, cap: 2.2, median: 8 };
+// Profil d'une voie pour le jeu : [x, z, e] tous les « step » m, e = hauteur au-dessus du sol (creusé) : celle d'un
+// pont ou d'une rampe ; pour une voie au ras du sol qui enjambe un passage inférieur, la profondeur du creux sous elle
+// (le bord du creux est à pic : on y ajoute deux points, de part et d'autre, pour que la chaussée reste plate)
+function profileOf(W, r, step) {
+  const pts = ringOf(r.p);
+  const P = r.e ? densifyE(pts, r.e.map(v => Math.max(0, v)), step) : densify(pts, step).map(([x, z]) => [x, z, 0]);
+  if (!W.cutAt || (r.e && r.e.some(v => v < -0.05))) return P;
+  const cutOf = p => W.cutAt(p[0], p[1]), mix = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+  const out = [];
+  let prev = null, pc = 0;
+  for (const p of P) {
+    const c = cutOf(p);
+    if (prev && Math.abs(c - pc) > 0.3) {
+      let lo = 0, hi = 1;
+      for (let it = 0; it < 12; it++) { const m = (lo + hi) / 2, cm = cutOf(mix(prev, p, m)); if (Math.abs(cm - pc) < Math.abs(cm - c)) lo = m; else hi = m; }
+      for (const q of [mix(prev, p, Math.max(0, lo - 0.03 / Math.hypot(p[0] - prev[0], p[1] - prev[1]))), mix(prev, p, Math.min(1, hi + 0.03 / Math.hypot(p[0] - prev[0], p[1] - prev[1])))]) out.push([q[0], q[1], q[2] + cutOf(q)]);
+    }
+    out.push([p[0], p[1], p[2] + c]);
+    prev = p; pc = c;
+  }
+  return out;
+}
+// Murs de soutènement d'un passage inférieur, et en haut un muret là où aucun pont ne passe : ils retiennent la voiture
+// dans le creux, et l'empêchent d'y tomber d'en haut. Le dessus du mur, au niveau du sol, cache le maillage creusé.
+// Entre deux chaussées dans le même creux, un muret de béton au milieu du terre-plein.
+function addTrenchWalls(W) {
+  if (!W.cuts) return;
+  const T = W.terrain, T0 = W.terrain0, CON = acc(), col = gray(0.56), top = gray(0.68), cap = gray(0.62);
+  for (const s of W.cuts) {
+    const nx = -s.uz, nz = s.ux, L = s.L;
+    for (const sg of [-1, 1]) {
+      const i = sg > 0 ? 1 : 0, mid = s.mid[i];
+      if (mid) {                                                          // muret du terre-plein (tracé par une seule des deux chaussées)
+        if (mid.r < s.r) continue;
+        const o = s.hw + mid.g / 2, ax = s.ax + nx * sg * o, az = s.az + nz * sg * o, bx = s.bx + nx * sg * o, bz = s.bz + nz * sg * o;
+        const ya = T(ax, az), yb = T(bx, bz);
+        slab(CON, [ax, ya + 0.4, az], [bx, yb + 0.4, bz], 0.5, 0.9, top);
+        addSegY(W.grid, ax, az, bx, bz, 0.25, -Infinity, Math.max(ya, yb) + 1.5);
+        continue;
+      }
+      if (s.join[i]) continue;                                            // même creux que la voie d'à côté (carrefour)
+      const ox = nx * s.wallAt[i] * sg, oz = nz * s.wallAt[i] * sg, ax = s.ax + ox, az = s.az + oz, bx = s.bx + ox, bz = s.bz + oz;
+      const ga = T(ax, az), gb = T(bx, bz), ta = T0(ax, az), tb = T0(bx, bz), mx = (ax + bx) / 2, mz = (az + bz) / 2;
+      const bridged = W.deckAt && W.deckAt(mx, mz, T0(mx, mz) + 1) > T0(mx, mz) - 1.5;   // un pont passe au-dessus : sa chaussée continue
+      quad(CON, ax, ga - 0.3, az, bx, gb - 0.3, bz, bx, tb, bz, ax, ta, az, -nx * sg, 0, -nz * sg, col, 0, ga / 4, L / 4, ta / 4);
+      const cw = s.cap[i], cx = nx * sg * cw, cz = nz * sg * cw;         // dessus du mur
+      if (cw > 0.1) quad(CON, ax, ta + 0.04, az, ax + cx, T0(ax + cx, az + cz) + 0.04, az + cz, bx + cx, T0(bx + cx, bz + cz) + 0.04, bz + cz, bx, tb + 0.04, bz, 0, 1, 0, cap, 0, 0, L / 4, cw / 4);
+      addSegY(W.grid, ax, az, bx, bz, 0.15, -Infinity, Math.min(ta, tb) - 1);                    // dans le creux
+      if (bridged) continue;
+      slab(CON, [ax + nx * sg * 0.12, ta + 0.45, az + nz * sg * 0.12], [bx + nx * sg * 0.12, tb + 0.45, bz + nz * sg * 0.12], 0.25, 0.9, top);   // muret
+      addSegY(W.grid, ax, az, bx, bz, 0.15, Math.min(ta, tb) - 1, Math.max(ta, tb) + 2);         // en haut
+    }
+  }
+  if (CON.pos.length) addMesh(W, accGeometry(CON), MAT.concrete, true);
+}
 // Ponts, viaducs et rampes d'échangeur (cartes générées) : dalle de béton (vide dessous et piliers pour un pont,
 // mur jusqu'au sol pour une rampe), glissières de béton. W.deckAt(x, z, y) : la chaussée surélevée sous (x, z),
 // pour un véhicule à la hauteur y (un pont n'existe pas pour qui roule dessous)
@@ -1715,8 +1866,9 @@ function addOverpasses(W, D) {
   const ends = new Map(), endKey = (x, z) => `${Math.round(x * 2)},${Math.round(z * 2)}`;   // bouts partagés par deux voies surélevées
   for (const r of ways) if (r.e) for (const k of [0, r.p.length - 2]) { const key = endKey(r.p[k], r.p[k + 1]); ends.set(key, (ends.get(key) || 0) + 1); }
   ways.forEach((r, ri) => {
-    if (!r.e) return;
-    const P = densifyE(ringOf(r.p), r.e, 3), hw = r.w / 2;
+    const P = profileOf(W, r, 3), hw = r.w / 2;
+    if (!P.some(p => p[2] > 0.05)) return;
+    const span = !(r.e && r.e.some(v => v > 0.05)), open = r.b || span;   // span : enjambe un passage inférieur, d'une culée à l'autre
     // culée : un bout en hauteur que rien ne prolonge (coupé au bord du décor) est fermé par un mur
     for (const [k, k2] of [[0, 1], [P.length - 1, P.length - 2]]) {
       const [x, z, e] = P[k], [x2, z2] = P[k2], L = Math.hypot(x2 - x, z2 - z) || 1;
@@ -1735,8 +1887,8 @@ function addOverpasses(W, D) {
       for (const sg of [-1, 1]) {
         const ox = nx * hw * sg, oz = nz * hw * sg;
         // le côté : l'épaisseur de la dalle (pont), ou un mur jusqu'au sol (rampe)
-        const ga = r.b ? ya - 1.2 : Math.min(ya - 0.3, T(ax + ox, az + oz) - 0.4), gb = r.b ? yb - 1.2 : Math.min(yb - 0.3, T(bx + ox, bz + oz) - 0.4);
-        quad(CON, ax + ox, ga, az + oz, bx + ox, gb, bz + oz, bx + ox, yb, bz + oz, ax + ox, ya, az + oz, nx * sg, 0, nz * sg, r.b ? light : dark, 0, ga / 4, L / 4, ya / 4);
+        const ga = open ? ya - 1.2 : Math.min(ya - 0.3, T(ax + ox, az + oz) - 0.4), gb = open ? yb - 1.2 : Math.min(yb - 0.3, T(bx + ox, bz + oz) - 0.4);
+        quad(CON, ax + ox, ga, az + oz, bx + ox, gb, bz + oz, bx + ox, yb, bz + oz, ax + ox, ya, az + oz, nx * sg, 0, nz * sg, open ? light : dark, 0, ga / 4, L / 4, ya / 4);
         if (Math.max(ea, eb) > 1) {                                        // glissière de béton : on ne tombe pas
           const gx = ox * 0.94, gz = oz * 0.94;
           slab(CON, [ax + gx, ya + 0.4, az + gz], [bx + gx, yb + 0.4, bz + gz], 0.35, 0.8, light);
@@ -1744,10 +1896,10 @@ function addOverpasses(W, D) {
         }
         if (!r.b && Math.max(ea, eb) > 1.2) addSegY(W.grid, ax + ox, az + oz, bx + ox, bz + oz, 0, -Infinity, Math.min(ya, yb) - 0.7);   // mur de rampe, pour qui est au sol
       }
-      if (!r.b) continue;
+      if (!open) continue;
       quad(CON, ax - nx * hw, ya - 1.2, az - nz * hw, bx - nx * hw, yb - 1.2, bz - nz * hw, bx + nx * hw, yb - 1.2, bz + nz * hw, ax + nx * hw, ya - 1.2, az + nz * hw, 0, -1, 0, dark);   // dessous du tablier
       sincePier += L;
-      if (sincePier >= 24 && Math.min(ea, eb) > 3) {                        // une pile tous les ~24 m : chevêtre sur deux colonnes
+      if (!span && sincePier >= 24 && Math.min(ea, eb) > 3) {                        // une pile tous les ~24 m : chevêtre sur deux colonnes
         sincePier = 0;
         const g = T(ax, az), top = ya - 1.2;
         obox(CON, ax, az, nx, nz, hw * 0.75, 0.55, top - 0.8, top, light);
@@ -1790,12 +1942,15 @@ function addTerrainMesh(W, cx, cz, sx, sz, cell, colorAt, fine = []) {
   const nx = Math.round(sx / cell), nz = Math.round(sz / cell);
   const geo = new THREE.PlaneGeometry(sx, sz, nx, nz).rotateX(-Math.PI / 2).translate(cx, 0, cz);
   const pos = geo.attributes.position;
-  for (let i = 0; i < pos.count; i++) pos.setY(i, W.terrain(pos.getX(i), pos.getZ(i)));
+  const H = W.terrainMesh || W.terrain;                                // le maillage peut différer du sol « physique » (passages inférieurs)
+  for (let i = 0; i < pos.count; i++) pos.setY(i, H(pos.getX(i), pos.getZ(i)));
   const x0 = cx - sx / 2, z0 = cz - sz / 2, cw = sx / nx, ch = sz / nz, isFine = new Uint8Array(nx * nz), cells = [];
-  for (const [a0, a1, b0, b1] of fine) {
+  for (const [a0, a1, b0, b1, k = 1] of fine) {                        // k : 2 pour des carreaux deux fois plus fins
     for (let j = Math.max(0, Math.floor((b0 - z0) / ch)); j <= Math.min(nz - 1, Math.floor((b1 - z0) / ch)); j++)
-      for (let i = Math.max(0, Math.floor((a0 - x0) / cw)); i <= Math.min(nx - 1, Math.floor((a1 - x0) / cw)); i++)
-        if (!isFine[j * nx + i]) { isFine[j * nx + i] = 1; cells.push(i, j); }
+      for (let i = Math.max(0, Math.floor((a0 - x0) / cw)); i <= Math.min(nx - 1, Math.floor((a1 - x0) / cw)); i++) {
+        if (!isFine[j * nx + i]) cells.push(i, j);
+        isFine[j * nx + i] = Math.max(isFine[j * nx + i], k);
+      }
   }
   if (cells.length) {                                                  // la grille grossière laisse un trou…
     const idx = [];
@@ -1820,19 +1975,26 @@ function addTerrainMesh(W, cx, cz, sx, sz, cell, colorAt, fine = []) {
   paint(geo);
   if (!cells.length) return;
   // … bouché par des carreaux fins ; sur un bord partagé avec la grille grossière, on reste sur son arête (pas de fente)
-  const n = Math.max(2, Math.round(cell)), P = [], I = [];
-  const fineAt = (i, j) => i < 0 || j < 0 || i >= nx || j >= nz || isFine[j * nx + i] === 1;
+  const n0 = Math.max(2, Math.round(cell)), P = [], I = [];
+  const kAt = (i, j) => i < 0 || j < 0 || i >= nx || j >= nz ? 255 : isFine[j * nx + i];   // 0 : grille grossière
   const Yc = (i, j) => pos.getY(i + (nx + 1) * j);
   for (let k = 0; k < cells.length; k += 2) {
-    const i = cells[k], j = cells[k + 1], base = P.length / 3;
+    const i = cells[k], j = cells[k + 1], base = P.length / 3, kc = isFine[j * nx + i], n = n0 * kc;
+    const Hc = (u, v) => H(x0 + (i + u / n) * cw, z0 + (j + v / n) * ch);
+    // le long d'un bord partagé avec des carreaux moins fins : leurs sommets, et la droite entre eux (pas de fente)
+    const edge = (kn, t, at) => { const r = kc / kn, t0 = Math.floor(t / r) * r; return t0 === t ? at(t) : lerp(at(t0), at(t0 + r), (t - t0) / r); };
     for (let v = 0; v <= n; v++) for (let u = 0; u <= n; u++) {
       const x = x0 + (i + u / n) * cw, z = z0 + (j + v / n) * ch;
       let y;
-      if (u === 0 && !fineAt(i - 1, j)) y = lerp(Yc(i, j), Yc(i, j + 1), v / n);
-      else if (u === n && !fineAt(i + 1, j)) y = lerp(Yc(i + 1, j), Yc(i + 1, j + 1), v / n);
-      else if (v === 0 && !fineAt(i, j - 1)) y = lerp(Yc(i, j), Yc(i + 1, j), u / n);
-      else if (v === n && !fineAt(i, j + 1)) y = lerp(Yc(i, j + 1), Yc(i + 1, j + 1), u / n);
-      else y = W.terrain(x, z);
+      if (u === 0 && !kAt(i - 1, j)) y = lerp(Yc(i, j), Yc(i, j + 1), v / n);
+      else if (u === n && !kAt(i + 1, j)) y = lerp(Yc(i + 1, j), Yc(i + 1, j + 1), v / n);
+      else if (v === 0 && !kAt(i, j - 1)) y = lerp(Yc(i, j), Yc(i + 1, j), u / n);
+      else if (v === n && !kAt(i, j + 1)) y = lerp(Yc(i, j + 1), Yc(i + 1, j + 1), u / n);
+      else if (u === 0 && kAt(i - 1, j) < kc) y = edge(kAt(i - 1, j), v, t => Hc(0, t));
+      else if (u === n && kAt(i + 1, j) < kc) y = edge(kAt(i + 1, j), v, t => Hc(n, t));
+      else if (v === 0 && kAt(i, j - 1) < kc) y = edge(kAt(i, j - 1), u, t => Hc(t, 0));
+      else if (v === n && kAt(i, j + 1) < kc) y = edge(kAt(i, j + 1), u, t => Hc(t, n));
+      else y = H(x, z);
       P.push(x, y, z);
     }
     for (let v = 0; v < n; v++) for (let u = 0; u < n; u++) {
@@ -3841,6 +4003,7 @@ function buildRealWorld(id, D, cityStyle) {
   };
   const tmp = new THREE.Color();
   poolBasins(W, D.sports);                                               // les piscines creusent (et buttent) le sol
+  carveUnderpasses(W, D);                                                // les passages inférieurs aussi
   addTerrainMesh(W, cx, cz, sx, sz, sx > 3500 ? 8 : 6, (x, y, z, ny, c) => {
     const n = 0.5 + 0.5 * Math.sin(x * 0.11 + Math.sin(z * 0.07) * 2) * Math.cos(z * 0.09);
     c.copy(QC.pave).lerp(QC.pave2, n);
@@ -3888,28 +4051,35 @@ function buildRealWorld(id, D, cityStyle) {
   W.roadGrid = new Grid(24);
   D.roads.forEach((r, i) => {
     const pts = ringOf(r.p), lift = 0.12 + (i % 4) * 0.03, uLen = r.k === 0 ? 12 : r.k === 2 ? 3 : r.w;
-    if (r.e) deckRibbon(accs[r.k], densifyE(pts, r.e, 4), r.w, lift, W.terrain, uLen);   // pont, viaduc, rampe d'échangeur
-    else ribbonInto(accs[r.k], densify(pts, 4), r.w, lift, W.terrain, uLen);
+    const P = profileOf(W, r, 4);
+    if (P.some(p => p[2] > 0.05)) deckRibbon(accs[r.k], P, r.w, lift, W.terrain, uLen);   // pont, viaduc, rampe d'échangeur
+    else ribbonInto(accs[r.k], densify(pts, 4), r.w, lift, W.terrain, uLen);         // au sol (ou au fond d'un passage inférieur)
     for (let k = 0; k < pts.length - 1; k++) {
       const s = { ax: pts[k][0], az: pts[k][1], bx: pts[k + 1][0], bz: pts[k + 1][1], w: r.w, n: r.n, k: r.k };
-      if (r.e) { s.ea = r.e[k]; s.eb = r.e[k + 1]; }                    // hauteur au-dessus du sol aux deux bouts
+      if (r.e) { s.ea = Math.max(0, r.e[k]); s.eb = Math.max(0, r.e[k + 1]); }   // hauteur au-dessus du sol (creusé) aux deux bouts
       segs.push(s);
       addRoadSeg(W.roadGrid, s);
     }
   });
   accs.forEach((a, k) => { if (a.pos.length) addMesh(W, accGeometry(a), MAT.road[k]); });
   // le trafic prend toutes les routes ; au sol (stationnement, piétons, cyclistes, chantiers, bonus) : ni autoroute ni pont
-  W.graphWays = D.roads.map(r => ({ pts: ringOf(r.p), w: r.w, k: r.k, es: r.e || null }));
-  W.roadWays = W.graphWays.filter((w, i) => !D.roads[i].e && !D.roads[i].x);
+  W.graphWays = D.roads.map(r => {
+    if (!r.e && !r.g) return { pts: ringOf(r.p), w: r.w, k: r.k, es: null };
+    const P = profileOf(W, r, 4);                                     // hauteurs au-dessus du sol creusé
+    return { pts: P.map(p => [p[0], p[1]]), w: r.w, k: r.k, es: P.map(p => p[2]) };
+  });
+  W.roadWays = W.graphWays.filter((w, i) => !D.roads[i].e && !D.roads[i].x && !D.roads[i].g);
   addOverpasses(W, D);
   if (D.rails) {                                                      // voies ferrées (cartes générées) : au sol, ou sur leur pont
     const RA = acc();
     for (const r of D.rails) {
       const pts = ringOf(r.p);
-      if (r.e) deckRibbon(RA, densifyE(pts, r.e, 4), 3, 0.09, W.terrain, 2.4); else ribbonInto(RA, densify(pts, 4), 3, 0.09, W.terrain, 2.4);
+      const P = profileOf(W, { ...r, w: 4 }, 4);
+      if (P.some(p => p[2] > 0.05)) deckRibbon(RA, P, 3, 0.09, W.terrain, 2.4); else ribbonInto(RA, densify(pts, 4), 3, 0.09, W.terrain, 2.4);
     }
     if (RA.pos.length) addMesh(W, accGeometry(RA), MAT.track);
   }
+  addTrenchWalls(W);
   addBikeWays(W, (D.bikes || []).map(bw => ({ pts: ringOf(bw.p), w: bw.w, k: bw.k })));
   W.areas = (D.areas || []).map(a => {
     const ring = ringOf(a.p), xs = ring.map(p => p[0]), zs = ring.map(p => p[1]);
@@ -3926,7 +4096,8 @@ function buildRealWorld(id, D, cityStyle) {
       if (d > lim) continue;
       if (y !== undefined) {                                           // sur un pont ou dessous : la rue à notre hauteur
         const t = clamp(((x - s.ax) * (s.bx - s.ax) + (z - s.az) * (s.bz - s.az)) / ((s.bx - s.ax) ** 2 + (s.bz - s.az) ** 2 || 1e-9), 0, 1);
-        if (Math.abs(W.terrain(x, z) + (s.ea !== undefined ? s.ea + (s.eb - s.ea) * t : 0) - y) > (s.ea !== undefined ? 3 : 5)) continue;
+        const g = s.ea !== undefined ? W.terrain(x, z) + s.ea + (s.eb - s.ea) * t : null;
+        if (g !== null ? Math.abs(g - y) > 3 : Math.abs(W.terrain(x, z) - y) > 5 && Math.abs((W.terrain0 || W.terrain)(x, z) - y) > 5) continue;
       }
       const L = Math.hypot(s.bx - s.ax, s.bz - s.az) || 1;
       const align = Math.abs(((s.bx - s.ax) * hx + (s.bz - s.az) * hz) / L);
