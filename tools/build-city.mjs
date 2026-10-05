@@ -29,6 +29,7 @@ const AREAS = {
     river: { seed: [46.8110, -71.1990], level: 2 },
     levels: [[3, 0.35], [4, 0.45], [5, 0.2]],   // étages quand OSM ne dit rien
     maxTrees: 4200,
+    parkTrees: 2500,
     spawn: { near: 'Château Frontenac', road: /^Rue Saint-Louis$/, toward: 'Porte Saint-Louis' },
     shops: 330,
     famous: /Anciens Canadiens|Paillard|Chez Temporel|Lapin Sauté|Cochon Dingue|Boutique de Noël|Continental|Chez Boulay|St-Patrick|Trois Garçons|Antiquaire|Casse-Crêpe|Simons|Pantoute|Petit Coin Latin|Moisan|Érico|Laurie Raphaël|Saint-Amour|Chic Shack|Château Fromage|Maison Smith|Tam Tam|Pub Saint-Alexandre|Bello|Il Teatro|Le Clocher Penché|Café-Boulangerie/i,
@@ -63,7 +64,8 @@ const AREAS = {
     boundary: { rel: 1878503, drive: 12, keep: 120 },
     river: null,
     levels: [[2, 0.3], [3, 0.55], [4, 0.15]],
-    maxTrees: 8000,
+    maxTrees: 7000,
+    parkTrees: 7000,
     spawn: { near: 'Station Mont-Royal', road: /^Rue Saint-Denis$/, toward: 'Carré Saint-Louis' },
     shops: 660,
     famous: /Schwartz|Banquise|Wilensky|St-Viateur Bagel|Fairmount Bagel|Beauty's|Moishes|L'Express|Pied de Cochon|Olimpico|Dieu du Ciel|Majestique|Patati Patata|Romados|Drawn & Quarterly|Kem Coba|Juliette & Chocolat|Juliette et Chocolat|Café Cherrier|Quartier Général|Doval|Guillaume|Casa del Popolo|Ritz PDB|Cinéma du Parc|Anecdote|Frite Alors|Santropol|Rhubarbe|Bily Kun|Laïka|Chez José|Ma Poule Mouillée|Le Sain Bol|Café Névé|Pâtisserie Au Kouign|Réservoir|Chez Claudette|Le Chien Fumant|Leméac|Lawrence|Librairie Gallimard|Renaud-Bray|Archambault|SAQ|Jean Coutu|Pharmaprix|Marché Mont-Royal|Première Moisson|Dépanneur Le Pick-Up|Cheskie|Arthurs|Chez Lévêque|Van Houtte|Club Soda|Métropolis|Théâtre La Chapelle|Espace Go|Rideau Vert|Quat'Sous/i,

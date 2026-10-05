@@ -9,7 +9,7 @@
 'use strict';
 
 const DEM_STEP = 30;       // m entre deux points d'altitude
-const VERSION = 7;         // cartes générées : on recalcule celles d'une version plus ancienne (2 : banlieue ; 3 : viaducs ; 4 : plex ; 5 : commerces ; 6 : voies ferrées ; 7 : passages inférieurs)
+const VERSION = 8;         // cartes générées : on recalcule celles d'une version plus ancienne (2 : banlieue ; 3 : viaducs ; 4 : plex ; 5 : commerces ; 6 : voies ferrées ; 7 : passages inférieurs ; 8 : arbres des parcs)
 const MASK_CELL = 3;       // m par cellule du masque eau / verdure
 const COIN_COUNT = 32;
 
@@ -308,12 +308,13 @@ async function compute(A, F, raw, log) {
   // ---------- Ponts, viaducs, passages inférieurs (cartes générées) : hauteur de chaque point de route (et de voie
   // ferrée) par rapport au sol. OSM dit qui passe au-dessus (bridge, layer) mais pas à quelle altitude ; on décide
   // qui bouge à chaque croisement :
-  //   - la voie du dessous plonge si OSM le laisse entendre : hauteur libre affichée (maxheight), niveau négatif,
-  //     petit tunnel, tranchée (cutting) ;
-  //   - sinon le pont monte s'il est long, sur remblai ou en viaduc ;
-  //   - sinon, sous un pont ferroviaire court, c'est la rue qui plonge (une voie ferrée change peu de niveau) ;
+  //   - la voie du dessous plonge si OSM le laisse entendre : niveau négatif, petit tunnel, tranchée (cutting), ou
+  //     hauteur libre affichée (maxheight) sous un pont court (pas un viaduc, ni une autoroute) ;
+  //   - sous un pont ferroviaire, c'est la rue qui plonge (une voie ferrée change peu de niveau), sauf sous un vrai
+  //     viaduc (bridge=viaduct, ou plus de 300 m) ;
   //   - sinon le pont monte.
-  // Un pont qui monte : tablier à 6,5 m par niveau, les approches en rampe (6 % ; 2,5 % pour un chemin de fer).
+  // Un pont qui monte : tablier à 6,5 m (par niveau) au-dessus de ce qu'il enjambe, en ligne droite entre ses bouts
+  // s'il franchit un creux ; les approches en rampe (6 % ; 2,5 % pour un chemin de fer).
   // Une voie qui plonge : 5,5 m sous le pont, en rampe (8 % ; 2,5 %) ; le jeu creuse le sol (passage inférieur).
   // Routes et rails ont chacun leur réseau : un passage à niveau ne soulève (ni n'enfonce) pas l'un avec l'autre.
   // Les autres ponts (ruisseau, rivière) restent au ras du sol. ----------
@@ -373,11 +374,12 @@ async function compute(A, F, raw, log) {
           const [cx, cz] = p.raw[kj], [dx, dz] = p.raw[kj + 1], at = hit(ax, az, bx, bz, cx, cz, dx, dz);
           if (!at) continue;
           seen.add(wj);
-          // tranchée, tunnel, niveau négatif : la voie du dessous plonge toujours ; hauteur libre affichée ou pont
-          // ferroviaire au-dessus d'une rue : seulement sous un pont court (pas sous un viaduc, ni une autoroute)
-          const short = !(o.len > 80 || o.up || o.motorway);
-          if (p.sink || p.layer < 0 || (short && (p.under || (o.rail && !p.rail)))) { sinks.push({ way: p, x: at[0], z: at[1], r: 12 }); o.spans = true; }
-          else raised.add(o);
+          // tranchée, tunnel, niveau négatif : la voie du dessous plonge toujours ; sous un pont ferroviaire aussi (un
+          // chemin de fer garde son niveau), sauf un vrai viaduc ; hauteur libre affichée : seulement sous un pont
+          // court (pas sous un viaduc, ni une autoroute)
+          const short = !(o.len > 80 || o.up || o.motorway), railKeeps = o.rail && !p.rail && (o.w.tags || {}).bridge !== 'viaduct' && o.len <= 300;
+          if (p.sink || p.layer < 0 || railKeeps || (short && p.under)) { sinks.push({ way: p, x: at[0], z: at[1], r: 12 }); o.spans = true; }
+          else { raised.add(o); (o.reqs ||= []).push({ x: at[0], z: at[1], H: p.bridge ? 6.5 * Math.max(1, o.layer) : 6.5 }); }
         }
       }
     });
@@ -390,11 +392,34 @@ async function compute(A, F, raw, log) {
         if (id === undefined) { id = E.length; vid.set(key, id); E.push(0); Dp.push(0); nbr.push([]); }
         return id;
       };
+      // tablier d'un pont qui monte, au-dessus du sol point par point : il relie ses deux bouts (au sol d'origine) en
+      // ligne droite, et dégage d'au moins 6,5 m ce qu'il enjambe (rampe de part et d'autre, palier entre deux).
+      // Un viaduc qui franchit un creux (vallée, carrière, gare de triage) arrive ainsi au niveau des rues à ses bouts.
+      const deck = o => {
+        const g = o.pts.map(([x, z]) => demAt(x, z)), cum = [0], n = g.length - 1;
+        for (let k = 1; k <= n; k++) cum.push(cum[k - 1] + Math.hypot(o.pts[k][0] - o.pts[k - 1][0], o.pts[k][1] - o.pts[k - 1][1]));
+        const L = cum[n] || 1;
+        const req = (o.reqs || []).map(c => {
+          let at = 0, bd = Infinity;
+          o.pts.forEach(([x, z], k) => { const d = Math.hypot(x - c.x, z - c.z); if (d < bd) { bd = d; at = k; } });
+          return { s: cum[at], y: demAt(c.x, c.z) + c.H };
+        }).sort((a, b) => a.s - b.s);
+        return g.map((gk, k) => {
+          const s = cum[k];
+          let y = g[0] + (g[n] - g[0]) * s / L;
+          for (const c of req) y = Math.max(y, c.y - upGrade * Math.abs(s - c.s));
+          for (let i = 0; i + 1 < req.length; i++) {
+            const a = req[i], b = req[i + 1];
+            if (s >= a.s && s <= b.s) y = Math.max(y, a.y + (b.y - a.y) * (s - a.s) / Math.max(1e-6, b.s - a.s));
+          }
+          return Math.max(0, y - gk);
+        });
+      };
       for (const o of ways) {
         o.ids = o.pts.map(([x, z]) => vert(x, z));
-        const H = raised.has(o) ? 6.5 * Math.max(1, o.layer) : 0;
+        const H = raised.has(o) ? deck(o) : null;
         o.ids.forEach((id, k) => {
-          if (H) E[id] = Math.max(E[id], H);
+          if (H) E[id] = Math.max(E[id], H[k]);
           if (o.sink) Dp[id] = Math.max(Dp[id], 5.5);
           if (!k) return;
           const d = Math.hypot(o.pts[k][0] - o.pts[k - 1][0], o.pts[k][1] - o.pts[k - 1][1]);
@@ -766,6 +791,7 @@ async function compute(A, F, raw, log) {
       if (hs.length) waterLevel = round1(hs[Math.floor(hs.length * 0.1)] - 0.5);
     }
   }
+  const parkCell = mask.map(v => (v === 2 ? 1 : 0));                  // la verdure d'OSM (parcs, bois…), avant les pelouses de banlieue
   // ---------- Banlieue (cartes générées) : dans un secteur peu bâti, les petits bâtiments résidentiels sont des maisons
   // (bungalow ou cottage : voir CityBatch.house dans le jeu) avec leur entrée asphaltée, et le terrain autour est gazonné ----------
   if (A.suburbs) {
@@ -889,7 +915,7 @@ async function compute(A, F, raw, log) {
   const rle = [];
   for (let k = 0; k < mask.length;) { let n = 1; while (k + n < mask.length && mask[k + n] === mask[k]) n++; rle.push(mask[k], n); k += n; }
 
-  // ---------- Arbres (inventaire OSM éclairci + arbres semés dans les parcs) ----------
+  // ---------- Arbres (inventaire OSM éclairci + arbres semés sur les pelouses et dans les parcs) ----------
   const trees = [];
   const treeGrid = new Grid(6);
   const treeFree = (x, z) => {
@@ -902,22 +928,55 @@ async function compute(A, F, raw, log) {
     return !nearBuilding(x, z, 1.4);
   };
   const plant = (x, z) => { const t = [x, z]; trees.push(round1(x), round1(z)); treeGrid.add(t, x, z, x, z); };
-  for (const el of greenRaw.elements) {
-    if (el.type !== 'node' || trees.length / 2 >= A.maxTrees) continue;
+  // hasard déterministe : hash2(i, j) dans [0, 1[, et un bruit doux à l'échelle de 40 m (bosquets et clairières)
+  const hash2 = (i, j) => { let h = (Math.imul(i, 374761393) + Math.imul(j, 668265263)) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
+  const smooth = t => t * t * (3 - 2 * t);
+  const noise = (x, z) => {
+    const fx = x / 40, fz = z / 40, i = Math.floor(fx), j = Math.floor(fz), sx = smooth(fx - i), sz = smooth(fz - j);
+    const a = hash2(i, j) + (hash2(i + 1, j) - hash2(i, j)) * sx, b = hash2(i, j + 1) + (hash2(i + 1, j + 1) - hash2(i, j + 1)) * sx;
+    return a + (b - a) * sz;
+  };
+  const inPark = (x, z) => {
+    const i = Math.floor((x - mx0) / MASK_CELL), j = Math.floor((z - mz0) / MASK_CELL), k = j * mnx + i;
+    return i >= 0 && j >= 0 && i < mnx && j < mnz && parkCell[k] === 1 && mask[k] === 2;
+  };
+  // l'inventaire d'OSM (souvent les arbres de rue, par milliers), pris dans un ordre mélangé jusqu'au budget (dans
+  // l'ordre du fichier, on garderait des quartiers entiers et pas un arbre ailleurs) ; ceux des parcs, à part
+  const osmTrees = greenRaw.elements.filter(el => el.type === 'node').map(el => [hash2(el.id % 1000003, (el.id / 1000003) | 0), el]).sort((a, b) => a[0] - b[0]);
+  const parkOsm = [], parkOsmGrid = new Grid(6);
+  for (const [h, el] of osmTrees) {
     const [x, z] = proj(el.lat, el.lon);
-    if (treeFree(x, z)) plant(x, z);
+    if (inPark(x, z)) { const t = [x, z, h, 1]; parkOsm.push(t); parkOsmGrid.add(t, x, z, x, z); }
+    else if (trees.length / 2 < A.maxTrees && treeFree(x, z)) plant(x, z);
   }
-  {
+  const nOsm = trees.length / 2;
+  {                                                                    // pelouses de banlieue
     let s = 12345;
     const rnd = () => ((s = (s * 16807) % 2147483647) - 1) / 2147483646;
     for (let tries = 0; tries < 90000 && trees.length / 2 < A.maxTrees + 800; tries++) {
       const x = B.minX + rnd() * (B.maxX - B.minX), z = B.minZ + rnd() * (B.maxZ - B.minZ);
       const i = Math.floor((x - mx0) / MASK_CELL), j = Math.floor((z - mz0) / MASK_CELL);
-      if (mask[j * mnx + i] !== 2 || rnd() > 0.5) continue;
+      if (mask[j * mnx + i] !== 2 || parkCell[j * mnx + i] || rnd() > 0.5) continue;
       if (treeFree(x, z)) plant(x, z);
     }
   }
-  await log(`  ${trees.length / 2} arbres`);
+  const nLawn = trees.length / 2 - nOsm;
+  let nParkOsm = 0;
+  // parcs et bois : leurs arbres d'OSM, et un semis là où il n'y en a pas (un arbre par case de 11 m au plus, en
+  // bosquets et clairières) ; au-delà du budget, les deux sont éclaircis uniformément
+  {
+    const roomy = (x, z) => { for (const t of parkOsmGrid.near(x, z, 6)) if (Math.hypot(t[0] - x, t[1] - z) < 6) return false; return true; };
+    const G = 11, cands = parkOsm.slice();
+    for (let gj = Math.floor(B.minZ / G); gj * G < B.maxZ; gj++) for (let gi = Math.floor(B.minX / G); gi * G < B.maxX; gi++) {
+      const x = (gi + 0.15 + 0.7 * hash2(gi, gj + 7919)) * G, z = (gj + 0.15 + 0.7 * hash2(gi + 104729, gj)) * G;
+      const i = Math.floor((x - mx0) / MASK_CELL), j = Math.floor((z - mz0) / MASK_CELL), k = j * mnx + i;
+      if (i < 0 || j < 0 || i >= mnx || j >= mnz || !parkCell[k] || mask[k] !== 2 || !inside(x, z, -4) || !inRegion(x, z, 60)) continue;
+      if (hash2(gi + 31337, gj + 4242) < Math.min(0.95, Math.max(0.08, noise(x, z) * 1.4 - 0.15)) && roomy(x, z)) cands.push([x, z, hash2(gi + 999, gj + 555), 0]);
+    }
+    const keep = Math.min(1, (A.parkTrees || 0) / Math.max(1, cands.length));
+    for (const [x, z, r, osm] of cands) if (r < keep && treeFree(x, z)) { plant(x, z); nParkOsm += osm; }
+  }
+  await log(`  ${trees.length / 2} arbres (${nOsm} de rue, ${nLawn} sur les pelouses, ${trees.length / 2 - nOsm - nLawn} dans les parcs dont ${nParkOsm} d'OSM)`);
 
   // ---------- Pièces : lieux célèbres, puis on complète le long des rues ----------
   const coins = [];
@@ -1182,6 +1241,7 @@ function liveArea(place, radius) {
     suburbs: true,
     overpasses: true,                                  // autoroutes, ponts, viaducs et échangeurs
     maxTrees: Math.round(Math.min(9000, 1000 * km2)),
+    parkTrees: Math.round(Math.min(6000, 1500 * km2)),
     shops: Math.round(Math.min(1500, 220 * km2)),       // densité d'une rue commerçante du Plateau (~210 au km²)
     landmarks: 'auto',
   };

@@ -414,11 +414,9 @@
 
 <div id="stats" class="hud sign">
   <span class="k">Pièces</span><span class="v" id="coins">0 / 32</span>
-  <span class="k">Temps</span><span class="v" id="time">00:00.0</span>
   <span class="k speed-row">Vitesse</span><span class="v speed-row" id="speed2">0 km/h</span>
   <span class="k">Nitro</span><span class="v" id="nitro"><i></i><i></i><i></i></span>
   <span class="k">Argent</span><span class="v" id="cash">0 $</span>
-  <span class="k" id="best-k" hidden>Record</span><span class="v" id="best" hidden></span>
 </div>
 
 <div id="nav" class="hud" hidden><span id="nav-arrow">↱</span><span class="nav-txt"><strong id="nav-dist">0 m</strong><span id="nav-street"></span></span></div>
@@ -463,7 +461,7 @@
   <section class="sign-panel" id="menu-main" aria-labelledby="menu-title">
     <p class="eyebrow" id="menu-eyebrow">Départ · Centre-ville</p>
     <h1 id="menu-title">Mini Char 3D</h1>
-    <p class="lede">Choisis une ville, on en génère la carte : ramasse les <strong id="menu-count">32 pièces d'or</strong> le plus vite possible.</p>
+    <p class="lede">Choisis une ville, on en génère la carte : ramasse les <strong id="menu-count">32 pièces d'or</strong> en te promenant.</p>
     <div class="gen" role="group" aria-labelledby="gen-title">
       <div class="goto-row">
         <label for="gen-city" id="gen-title">Ville</label>
@@ -599,8 +597,8 @@
   <section class="sign-panel" aria-labelledby="win-title">
     <p class="eyebrow" id="win-eyebrow">Arrivée</p>
     <h1 id="win-title">Bravo !</h1>
-    <p class="lede" id="win-lede">Toutes les pièces ramassées en</p>
-    <p class="win-time" id="win-time">00:00.0</p>
+    <p class="lede" id="win-lede">Toutes les pièces ramassées !</p>
+    <p class="win-time" id="win-time">+300 $</p>
     <p class="fine" id="win-best"></p>
     <div class="actions" style="margin-top: 20px;">
       <button id="btn-again" class="btn" type="button">Rejouer</button>
@@ -670,11 +668,6 @@ const pickW = (list, u) => { let t = u * list.reduce((s, x) => s + x[1], 0); for
 const perMap = (W, t, def) => t[W.id] ?? (W.km2 ? Math.round(clamp(t.plateau * W.km2 / 8.2, (t.quebec ?? def) * 0.3, t.plateau)) : def);
 // …sauf ce qui se replace sans cesse autour du char (piétons, cyclistes, circulation) : le compte du Plateau, quelle que soit la taille
 const nearMap = (W, t, def) => t[W.id] ?? (W.km2 ? t.plateau : def);
-function fmt(s) {
-  const tenths = Math.floor(s * 10);
-  const m = Math.floor(tenths / 600), sec = Math.floor((tenths % 600) / 10), d = tenths % 10;
-  return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}.${d}`;
-}
 function closestOnSeg(x, z, s) {
   const dx = s.bx - s.ax, dz = s.bz - s.az;
   const t = clamp(((x - s.ax) * dx + (z - s.az) * dz) / (dx * dx + dz * dz || 1e-9), 0, 1);
@@ -6505,9 +6498,9 @@ function toggleMute() {
 // =====================================================================
 const $ = id => document.getElementById(id);
 const el = {
-  coins: $('coins'), time: $('time'), speed: $('speed'), speed2: $('speed2'),
+  coins: $('coins'), speed: $('speed'), speed2: $('speed2'),
   sign: $('streetsign'), signKind: $('street-kind'), signName: $('street-name'),
-  best: $('best'), bestK: $('best-k'), toast: $('toast'), sound: $('sound-label'),
+  toast: $('toast'), sound: $('sound-label'),
   menu: $('menu'), win: $('win'), winTime: $('win-time'), winBest: $('win-best'), winLede: $('win-lede'),
   menuNote: $('menu-note'), mapNote: $('map-note'), route: $('menu-route'), eyebrow: $('menu-eyebrow'), count: $('menu-count'),
   start: $('btn-start'), newGame: $('btn-new'), nitro: $('nitro'), cash: $('cash'), flash: $('flash'),
@@ -6837,7 +6830,7 @@ function buildPedestrians(W) {
     }
   }
   if (!routes.length) return;
-  const N = nearMap(W, { plateau: 850, quebec: 850, invente: 360 }, 400), list = [];
+  const N = nearMap(W, { plateau: 425, quebec: 425, invente: 180 }, 200), list = [];
   const cum = []; let tot = 0;
   for (const r of routes) { tot += r.weight; cum.push(tot); }
   const pickR = () => { const t = rand() * tot; let a = 0, b = cum.length - 1; while (a < b) { const m = (a + b) >> 1; if (cum[m] < t) a = m + 1; else b = m; } return routes[a]; };
@@ -7240,10 +7233,7 @@ const MODE_NOTE = 'Mode Chantiers : des cônes orange, des clôtures et des barr
 let state = 'menu';             // menu | play | won
 let gameActive = false;         // une partie est en cours (menu = pause)
 let mode = 'chantier';          // chantier (par défaut) | classique
-let elapsed = 0, collected = 0, camMode = 0;
-const recordKey = () => (world.id === 'ville' ? `ville-${world.D.place.lat.toFixed(4)},${world.D.place.lon.toFixed(4)},${world.D.place.radius}` :
-  world.id + (world.id === 'plateau' ? '-arrondissement' : '')) + (mode === 'chantier' ? '-chantier' : '');
-const bestOf = key => { const v = parseFloat(store.get('best-' + key) ?? (key === 'invente' ? store.get('best') : null)); return v > 0 ? v : null; };
+let elapsed = 0, collected = 0, camMode = 0;   // elapsed : temps de jeu (sert au tarif du taxi, pas affiché)
 
 let toastTimer = 0;
 function toast(msg, ms = 1300) {
@@ -7259,8 +7249,7 @@ function refreshMenu() {
   el.route.innerHTML = '<span class="arrow">↑</span>' + info.route.map(r => `<span>${r}</span>`).join('<span class="dot">·</span>');
   el.mapNote.textContent = mode === 'chantier' ? `${info.note} ${MODE_NOTE}` : info.note;
   el.count.textContent = `${world.coins.length} pièces d'or`;
-  const best = bestOf(recordKey());
-  el.menuNote.textContent = `Carte actuelle : ${mapName(world)}.` + (best != null ? ` Record${mode === 'chantier' ? ' en mode Chantiers' : ''} : ${fmt(best)}.` : '');
+  el.menuNote.textContent = `Carte actuelle : ${mapName(world)}.`;
   el.start.textContent = gameActive ? 'Reprendre' : 'Démarrer';
   el.newGame.hidden = !gameActive;
   if (!$('menu-adv').hidden && !$('garage').hidden) renderGarage();
@@ -7271,8 +7260,6 @@ function refreshMenu() {
   $('voice-' + (voiceOn ? 'on' : 'off')).checked = true;
   $('start-' + startMode).checked = true;
   if (startMode === 'hasard') el.eyebrow.textContent = 'Départ · au hasard';
-  el.best.hidden = el.bestK.hidden = best == null;
-  if (best != null) setText(el.best, fmt(best));
 }
 
 function takeCoin(c, silent) {
@@ -7292,14 +7279,11 @@ function takeCoin(c, silent) {
 function win() {
   state = 'won';
   gameActive = false;
-  const best = bestOf(recordKey());
-  const isRecord = best == null || elapsed < best;
-  if (isRecord) store.set('best-' + recordKey(), String(elapsed));
-  const bonus = 300 + (isRecord ? 200 : 0);
+  const bonus = 300;
   addCash(bonus);
-  el.winLede.textContent = `Les ${world.coins.length} pièces ramassées en`;
-  el.winTime.textContent = fmt(elapsed);
-  el.winBest.textContent = (isRecord ? 'Nouveau record !' : `Record : ${fmt(best)}`) + ` · +${bonus} $`;
+  el.winLede.textContent = `Les ${world.coins.length} pièces ramassées !`;
+  el.winTime.textContent = `+${bonus} $`;
+  el.winBest.textContent = `Prime d'arrivée · ${fmtCash(cash)} en poche`;
   $('win-eyebrow').textContent = (world.id === 'invente' ? 'Arrivée' : `Arrivée · ${mapName(world)}`) + (mode === 'chantier' ? ' · Chantiers' : '');
   el.win.hidden = false;
   refreshMenu();
@@ -7632,7 +7616,7 @@ document.querySelectorAll('input[name="radius"]').forEach(r => r.addEventListene
 
 // ---------- Zone suivante : sur une carte générée, en s'approchant du bord, la zone d'à côté se prépare (Worker) ;
 // au bord, on y passe. Le char garde sa vraie position (lat/lon), sa vitesse et son cap ; chaque zone est une
-// nouvelle course (ses 32 pièces, le chrono repart). ----------
+// nouvelle course (ses 32 pièces). ----------
 const zones = { job: null, ready: null, entering: false, retryAt: 0, noteAt: 0, note: '' };   // retryAt, noteAt : performance.now()
 function resetZones() {
   if (zones.job) zones.job.ac.abort();
@@ -7964,7 +7948,7 @@ function updateEvents(t) {
   }
   if (cyclistHit) {
     cyclistHit = false;
-    if (state === 'play') { elapsed += 5; toast('Aïe ! Un cycliste renversé · +5 s', 1600); }
+    if (state === 'play') { addCash(-20); toast('Aïe ! Un cycliste renversé · −20 $', 1600); }
   }
 }
 
@@ -8242,7 +8226,6 @@ function updateHUD(dt) {
   setText(el.speed, kmh);
   setText(el.speed2, `${kmh} km/h`);
   setText(el.coins, `${collected} / ${world.coins.length}`);
-  setText(el.time, fmt(elapsed));
   const nk = car.nitro * 2 + (car.boost > 0 ? 1 : 0);
   if (el.nitro._k !== nk) {
     el.nitro._k = nk;
