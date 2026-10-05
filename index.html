@@ -668,6 +668,8 @@ const pick = (list, u) => list[Math.floor(u * list.length) % list.length];
 const pickW = (list, u) => { let t = u * list.reduce((s, x) => s + x[1], 0); for (const [v, w] of list) { if (t < w) return v; t -= w; } return list[list.length - 1][0]; };
 // Quantités réglées carte par carte ; une carte générée prend celles du Plateau (8,2 km²) à l'échelle de sa superficie
 const perMap = (W, t, def) => t[W.id] ?? (W.km2 ? Math.round(clamp(t.plateau * W.km2 / 8.2, (t.quebec ?? def) * 0.3, t.plateau)) : def);
+// …sauf ce qui se replace sans cesse autour du char (piétons, cyclistes, circulation) : le compte du Plateau, quelle que soit la taille
+const nearMap = (W, t, def) => t[W.id] ?? (W.km2 ? t.plateau : def);
 function fmt(s) {
   const tenths = Math.floor(s * 10);
   const m = Math.floor(tenths / 600), sec = Math.floor((tenths % 600) / 10), d = tenths % 10;
@@ -1222,6 +1224,14 @@ const roofMetalTex = makeTexture(128, (g, S) => {
   for (let x = 0; x < S; x += 16) { g.fillStyle = '#a4a9ae'; g.fillRect(x, 0, 2, S); g.fillStyle = '#f3f5f7'; g.fillRect(x + 2, 0, 1, S); }
 });
 const roofFlatTex = makeTexture(128, (g, S) => { g.fillStyle = '#a3a29d'; g.fillRect(0, 0, S, S); speckle(g, S, 120, 60, 2500); });
+// voie ferrée : ballast, traverses de bois et deux rails (le long de la texture = le long de la voie ; une texture = 2,4 m)
+const trackTex = makeTexture(128, (g, S) => {
+  g.fillStyle = '#7d756b'; g.fillRect(0, 0, S, S);
+  speckle(g, S, 90, 70, 3000);
+  g.fillStyle = '#4a3a2c';
+  for (let k = 0; k < 4; k++) g.fillRect(k * S / 4 + 6, S * 0.12, 14, S * 0.76);
+  for (const y of [0.26, 0.74]) { g.fillStyle = '#b8bcc0'; g.fillRect(0, S * y - 3, S, 5); g.fillStyle = 'rgba(0,0,0,0.35)'; g.fillRect(0, S * y + 2, S, 2); }
+});
 const trimTex = makeTexture(128, (g, S) => { g.fillStyle = '#f2f2f0'; g.fillRect(0, 0, S, S); noise(g, S, S, 2500, 0.05); });
 // ---------- Maisons de banlieue : déclin de vinyle, brique, fenêtre, porte de garage, bardeaux d'asphalte (une texture = 2 m) ----------
 const sidingTex = makeTexture(256, (g, S) => {                         // dix planches de déclin, teintées par maison
@@ -1341,11 +1351,11 @@ const curtainTex = makeTexture(64, (g, W, H) => {
   for (let x = 0; x < W; x += 16) g.fillRect(x, 0, 2, H);
 }, 128);
 // Panneau « Limite de l'arrondissement » (dessiné à la construction de la carte, une fois les polices chargées)
-const limitSignTex = (bg, fg, name, title = 'LIMITE DE L’ARRONDISSEMENT') => makeTexture(512, (g, W, H) => {
+const limitSignTex = (bg, fg, name) => makeTexture(512, (g, W, H) => {
   g.fillStyle = bg; g.fillRect(0, 0, W, H);
   g.strokeStyle = fg; g.lineWidth = 10; g.strokeRect(12, 12, W - 24, H - 24);
   g.fillStyle = fg; g.textAlign = 'center'; g.textBaseline = 'middle';
-  g.font = '600 42px "Barlow Semi Condensed", "Arial Narrow", Arial, sans-serif'; g.fillText(title, W / 2, H * 0.3, W - 70);
+  g.font = '600 42px "Barlow Semi Condensed", "Arial Narrow", Arial, sans-serif'; g.fillText('LIMITE DE L’ARRONDISSEMENT', W / 2, H * 0.3, W - 70);
   g.font = '700 66px "Barlow Semi Condensed", "Arial Narrow", Arial, sans-serif'; g.fillText(name, W / 2, H * 0.64, W - 70);
 }, 256);
 
@@ -1409,6 +1419,7 @@ const MAT = {
   pad: new THREE.MeshStandardMaterial({ color: 0xbcb6aa, roughness: 0.95, ...offset(-1) }),
   stone: { normal: new THREE.MeshStandardMaterial({ map: stoneTex, roughness: 0.95, side: THREE.DoubleSide }), retro: basic(0x120624, { side: THREE.DoubleSide }) },
   concrete: { normal: new THREE.MeshStandardMaterial({ map: trimTex, vertexColors: true, roughness: 0.9 }), retro: basic(0x1a0b30) },   // ponts, viaducs
+  track: { normal: new THREE.MeshStandardMaterial({ map: trackTex, roughness: 0.95, ...offset(-1) }), retro: basic(0x3a1f5c, { ...offset(-1) }) },   // voies ferrées
   water: {
     normal: new THREE.MeshStandardMaterial({ color: 0x2a7fc4, roughness: 0.08, metalness: 0.05, transparent: true, opacity: 0.84 }),
     retro: basic(hdr(0.01, 0.02, 0.09), { transparent: true, opacity: 0.8 }),
@@ -1700,9 +1711,10 @@ function deckRibbon(A, points, width, lift, heightAt, uLen) {
 function addOverpasses(W, D) {
   const T = W.terrain, CON = acc(), light = gray(0.82), dark = gray(0.62);
   W.deckGrid = new Grid(24);
-  const ends = new Map(), endKey = (x, z) => `${Math.round(x * 2)},${Math.round(z * 2)}`;   // bouts partagés par deux routes surélevées
-  for (const r of D.roads) if (r.e) for (const k of [0, r.p.length - 2]) { const key = endKey(r.p[k], r.p[k + 1]); ends.set(key, (ends.get(key) || 0) + 1); }
-  D.roads.forEach((r, ri) => {
+  const ways = D.roads.concat((D.rails || []).map(r => ({ ...r, w: 4 })));   // routes, et voies ferrées sur pont ou remblai
+  const ends = new Map(), endKey = (x, z) => `${Math.round(x * 2)},${Math.round(z * 2)}`;   // bouts partagés par deux voies surélevées
+  for (const r of ways) if (r.e) for (const k of [0, r.p.length - 2]) { const key = endKey(r.p[k], r.p[k + 1]); ends.set(key, (ends.get(key) || 0) + 1); }
+  ways.forEach((r, ri) => {
     if (!r.e) return;
     const P = densifyE(ringOf(r.p), r.e, 3), hw = r.w / 2;
     // culée : un bout en hauteur que rien ne prolonge (coupé au bord du décor) est fermé par un mur
@@ -3890,6 +3902,14 @@ function buildRealWorld(id, D, cityStyle) {
   W.graphWays = D.roads.map(r => ({ pts: ringOf(r.p), w: r.w, k: r.k, es: r.e || null }));
   W.roadWays = W.graphWays.filter((w, i) => !D.roads[i].e && !D.roads[i].x);
   addOverpasses(W, D);
+  if (D.rails) {                                                      // voies ferrées (cartes générées) : au sol, ou sur leur pont
+    const RA = acc();
+    for (const r of D.rails) {
+      const pts = ringOf(r.p);
+      if (r.e) deckRibbon(RA, densifyE(pts, r.e, 4), 3, 0.09, W.terrain, 2.4); else ribbonInto(RA, densify(pts, 4), 3, 0.09, W.terrain, 2.4);
+    }
+    if (RA.pos.length) addMesh(W, accGeometry(RA), MAT.track);
+  }
   addBikeWays(W, (D.bikes || []).map(bw => ({ pts: ringOf(bw.p), w: bw.w, k: bw.k })));
   W.areas = (D.areas || []).map(a => {
     const ring = ringOf(a.p), xs = ring.map(p => p[0]), zs = ring.map(p => p[1]);
@@ -3962,64 +3982,68 @@ function buildRealWorld(id, D, cityStyle) {
       addSeg(W.grid, p[0], p[1], q[0], q[1], 0.2);
       limitGrid.add({ ax: p[0], az: p[1], bx: q[0], bz: q[1] }, Math.min(p[0], q[0]), Math.min(p[1], q[1]), Math.max(p[0], q[0]), Math.max(p[1], q[1]));
     });
-    // rideau lumineux (bleu ciel ; rose néon en mode années 80)
-    const cur = acc(), pts = densify(ring.concat([ring[0]]), 6);
-    let u = 0;
-    for (let k = 0; k < pts.length - 1; k++) {
-      const [ax, az] = pts[k], [bx, bz] = pts[k + 1], L = Math.hypot(bx - ax, bz - az) || 1;
-      const ga = W.terrain(ax, az) - 0.3, gb = W.terrain(bx, bz) - 0.3;
-      quad(cur, ax, ga, az, bx, gb, bz, bx, gb + 5, bz, ax, ga + 5, az, -(bz - az) / L, 0, (bx - ax) / L, WHITE, u / 6, 0, (u + L) / 6, 1);
-      u += L;
-    }
-    const cm = new THREE.Mesh(accGeometry(cur));
-    reg(cm, basic(0x6cc4ff, { map: curtainTex, transparent: true, opacity: 0.5, depthWrite: false, side: THREE.DoubleSide }),
-      basic(hdr(2.2, 0.35, 1.6), { map: curtainTex, transparent: true, opacity: 0.7, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending }));
-    cm.renderOrder = 3;
-    W.group.add(cm);
-    // barrières là où une rue franchit la limite
-    const crossings = [];
-    for (const r of D.roads) {
-      const rp = ringOf(r.p);
-      for (let k = 0; k < rp.length - 1; k++) {
-        const [ax, az] = rp[k], [bx, bz] = rp[k + 1], cand = new Set();
-        for (const q of densify([[ax, az], [bx, bz]], 20)) for (const s of limitGrid.at(q[0], q[1])) cand.add(s);
-        for (const s of cand) {
-          const hit = segIntersect(ax, az, bx, bz, s.ax, s.az, s.bx, s.bz);
-          if (!hit || crossings.some(c => Math.hypot(c.x - hit[0], c.z - hit[1]) < Math.max(c.w, r.w))) continue;
-          const L = Math.hypot(bx - ax, bz - az) || 1;
-          const th = clamp(((hit[0] - ax) * (bx - ax) + (hit[1] - az) * (bz - az)) / (L * L), 0, 1);
-          crossings.push({ x: hit[0], z: hit[1], ux: (bx - ax) / L, uz: (bz - az) / L, w: r.w, e: r.e ? lerp(r.e[k], r.e[k + 1], th) : 0 });
+    // carte générée : au bord, la zone suivante prend le relais, donc ni rideau ni barrières (le mur invisible
+    // ne sert qu'à attendre qu'elle soit prête) ; carte fournie : la limite de l'arrondissement se voit
+    if (!D.place) {
+      // rideau lumineux (bleu ciel ; rose néon en mode années 80)
+      const cur = acc(), pts = densify(ring.concat([ring[0]]), 6);
+      let u = 0;
+      for (let k = 0; k < pts.length - 1; k++) {
+        const [ax, az] = pts[k], [bx, bz] = pts[k + 1], L = Math.hypot(bx - ax, bz - az) || 1;
+        const ga = W.terrain(ax, az) - 0.3, gb = W.terrain(bx, bz) - 0.3;
+        quad(cur, ax, ga, az, bx, gb, bz, bx, gb + 5, bz, ax, ga + 5, az, -(bz - az) / L, 0, (bx - ax) / L, WHITE, u / 6, 0, (u + L) / 6, 1);
+        u += L;
+      }
+      const cm = new THREE.Mesh(accGeometry(cur));
+      reg(cm, basic(0x6cc4ff, { map: curtainTex, transparent: true, opacity: 0.5, depthWrite: false, side: THREE.DoubleSide }),
+        basic(hdr(2.2, 0.35, 1.6), { map: curtainTex, transparent: true, opacity: 0.7, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending }));
+      cm.renderOrder = 3;
+      W.group.add(cm);
+      // barrières là où une rue franchit la limite
+      const crossings = [];
+      for (const r of D.roads) {
+        const rp = ringOf(r.p);
+        for (let k = 0; k < rp.length - 1; k++) {
+          const [ax, az] = rp[k], [bx, bz] = rp[k + 1], cand = new Set();
+          for (const q of densify([[ax, az], [bx, bz]], 20)) for (const s of limitGrid.at(q[0], q[1])) cand.add(s);
+          for (const s of cand) {
+            const hit = segIntersect(ax, az, bx, bz, s.ax, s.az, s.bx, s.bz);
+            if (!hit || crossings.some(c => Math.hypot(c.x - hit[0], c.z - hit[1]) < Math.max(c.w, r.w))) continue;
+            const L = Math.hypot(bx - ax, bz - az) || 1;
+            const th = clamp(((hit[0] - ax) * (bx - ax) + (hit[1] - az) * (bz - az)) / (L * L), 0, 1);
+            crossings.push({ x: hit[0], z: hit[1], ux: (bx - ax) / L, uz: (bz - az) / L, w: r.w, e: r.e ? lerp(r.e[k], r.e[k + 1], th) : 0 });
+          }
         }
       }
-    }
-    const name = D.district || 'Le Plateau-Mont-Royal', title = D.place ? 'LIMITE DE LA CARTE' : undefined;
-    const LM = {
-      normal: [CH_MATS.normal[0], CH_MATS.normal[1], new THREE.MeshStandardMaterial({ map: limitSignTex('#1f4f8f', '#ffffff', name, title), roughness: 0.5 }), blinkMat],
-      retro: [CH_MATS.retro[0], CH_MATS.retro[1], basic(0xffffff, { map: limitSignTex('#07020f', '#29f3ff', name, title) }), blinkRetro],
-    };
-    const BA = [acc(), acc(), acc(), acc()];                           // poteaux, planches rayées, panneau, feux
-    for (const c of crossings) {
-      const inward = W.inRegion(c.x + c.ux * 6, c.z + c.uz * 6) ? 1 : -1;
-      const ix = c.ux * inward, iz = c.uz * inward, vx = -iz, vz = ix;
-      const cx = c.x + ix * 0.9, cz = c.z + iz * 0.9, hw = c.w / 2, n = Math.max(1, Math.ceil(c.w / 2.5)), step = c.w / n;
-      for (let k = 0; k < n; k++) {
-        const o = -hw + step * (k + 0.5), x = cx + vx * o, z = cz + vz * o, y = W.terrain(x, z) + c.e, len = Math.min(2.4, step - 0.1), hl = len / 2;
-        for (const sg of [-1, 1]) obox(BA[0], x + vx * hl * sg, z + vz * hl * sg, vx, vz, 0.05, 0.3, y, y + 1.15, WHITE);
-        for (const [y0, y1] of [[0.55, 0.8], [0.88, 1.13]]) for (const sd of [-1, 1]) {
-          const ox = ix * 0.04 * sd, oz = iz * 0.04 * sd;
-          quad(BA[1], x - vx * hl + ox, y + y0, z - vz * hl + oz, x + vx * hl + ox, y + y0, z + vz * hl + oz,
-            x + vx * hl + ox, y + y1, z + vz * hl + oz, x - vx * hl + ox, y + y1, z - vz * hl + oz, ix * sd, 0, iz * sd, WHITE, 0, 0, len / 0.8, 1);
+      const name = D.district || 'Le Plateau-Mont-Royal';
+      const LM = {
+        normal: [CH_MATS.normal[0], CH_MATS.normal[1], new THREE.MeshStandardMaterial({ map: limitSignTex('#1f4f8f', '#ffffff', name), roughness: 0.5 }), blinkMat],
+        retro: [CH_MATS.retro[0], CH_MATS.retro[1], basic(0xffffff, { map: limitSignTex('#07020f', '#29f3ff', name) }), blinkRetro],
+      };
+      const BA = [acc(), acc(), acc(), acc()];                           // poteaux, planches rayées, panneau, feux
+      for (const c of crossings) {
+        const inward = W.inRegion(c.x + c.ux * 6, c.z + c.uz * 6) ? 1 : -1;
+        const ix = c.ux * inward, iz = c.uz * inward, vx = -iz, vz = ix;
+        const cx = c.x + ix * 0.9, cz = c.z + iz * 0.9, hw = c.w / 2, n = Math.max(1, Math.ceil(c.w / 2.5)), step = c.w / n;
+        for (let k = 0; k < n; k++) {
+          const o = -hw + step * (k + 0.5), x = cx + vx * o, z = cz + vz * o, y = W.terrain(x, z) + c.e, len = Math.min(2.4, step - 0.1), hl = len / 2;
+          for (const sg of [-1, 1]) obox(BA[0], x + vx * hl * sg, z + vz * hl * sg, vx, vz, 0.05, 0.3, y, y + 1.15, WHITE);
+          for (const [y0, y1] of [[0.55, 0.8], [0.88, 1.13]]) for (const sd of [-1, 1]) {
+            const ox = ix * 0.04 * sd, oz = iz * 0.04 * sd;
+            quad(BA[1], x - vx * hl + ox, y + y0, z - vz * hl + oz, x + vx * hl + ox, y + y0, z + vz * hl + oz,
+              x + vx * hl + ox, y + y1, z + vz * hl + oz, x - vx * hl + ox, y + y1, z - vz * hl + oz, ix * sd, 0, iz * sd, WHITE, 0, 0, len / 0.8, 1);
+          }
+          if (k % 2 === 0) obox(BA[3], x + vx * hl, z + vz * hl, vx, vz, 0.09, 0.09, y + 1.15, y + 1.33, WHITE);
         }
-        if (k % 2 === 0) obox(BA[3], x + vx * hl, z + vz * hl, vx, vz, 0.09, 0.09, y + 1.15, y + 1.33, WHITE);
+        const sx = c.x + ix * 0.3, sz = c.z + iz * 0.3, y = W.terrain(sx, sz) + c.e, rx = iz, rz = -ix;   // panneau tourné vers l'intérieur
+        quad(BA[2], sx - rx, y + 1.45, sz - rz, sx + rx, y + 1.45, sz + rz, sx + rx, y + 2.45, sz + rz, sx - rx, y + 2.45, sz - rz, ix, 0, iz, WHITE);
+        obox(BA[0], sx - ix * 0.03, sz - iz * 0.03, rx, rz, 1.03, 0.025, y + 1.42, y + 2.48, gray(0.2));
+        for (const sg of [-1, 1]) obox(BA[0], sx + rx * 0.8 * sg - ix * 0.07, sz + rz * 0.8 * sg - iz * 0.07, ix, iz, 0.03, 0.03, y, y + 1.45, gray(0.55));
       }
-      const sx = c.x + ix * 0.3, sz = c.z + iz * 0.3, y = W.terrain(sx, sz) + c.e, rx = iz, rz = -ix;   // panneau tourné vers l'intérieur
-      quad(BA[2], sx - rx, y + 1.45, sz - rz, sx + rx, y + 1.45, sz + rz, sx + rx, y + 2.45, sz + rz, sx - rx, y + 2.45, sz - rz, ix, 0, iz, WHITE);
-      obox(BA[0], sx - ix * 0.03, sz - iz * 0.03, rx, rz, 1.03, 0.025, y + 1.42, y + 2.48, gray(0.2));
-      for (const sg of [-1, 1]) obox(BA[0], sx + rx * 0.8 * sg - ix * 0.07, sz + rz * 0.8 * sg - iz * 0.07, ix, iz, 0.03, 0.03, y, y + 1.45, gray(0.55));
+      const bgeo = mergeAccs(BA);
+      if (bgeo) { const bm = new THREE.Mesh(bgeo); reg(bm, LM.normal, LM.retro); bm.castShadow = bm.receiveShadow = true; W.group.add(bm); }
+      W.limitGates = crossings;
     }
-    const bgeo = mergeAccs(BA);
-    if (bgeo) { const bm = new THREE.Mesh(bgeo); reg(bm, LM.normal, LM.retro); bm.castShadow = bm.receiveShadow = true; W.group.add(bm); }
-    W.limitGates = crossings;
   }
 
   // bâtiments (avec les enseignes de leurs commerces)
@@ -4134,6 +4158,8 @@ function buildRealWorld(id, D, cityStyle) {
       g.closePath(); g.fill();
     }
     g.lineCap = g.lineJoin = 'round';
+    g.strokeStyle = pal.wall; g.lineWidth = Math.max(1.4, 3 * res);   // voies ferrées
+    for (const r of D.rails || []) strokePolyline(g, P, r.p);
     g.strokeStyle = pal.wall; g.lineWidth = 2.2;
     for (const wl of D.walls || []) strokePolyline(g, P, wl.p);
     for (const k of [3, 2, 1, 0]) {
@@ -4902,7 +4928,7 @@ function buildCyclists(W) {
   const cumW = (lo, hi) => { const c = []; let t = 0; for (let i = lo; i < hi; i++) { t += routes[i].len; c.push(t); } return c; };
   const cBike = cumW(0, nBike), cRoad = cumW(nBike, routes.length);
   const pickRoute = (c, lo) => { const t = rand() * c[c.length - 1]; let a = 0, b = c.length - 1; while (a < b) { const m = (a + b) >> 1; if (c[m] < t) a = m + 1; else b = m; } return routes[lo + a]; };
-  const N = perMap(W, { plateau: 320, quebec: 240, invente: 170 }, 200), list = [];
+  const N = nearMap(W, { plateau: 320, quebec: 240, invente: 170 }, 200), list = [];
   for (let i = 0; i < N; i++) {
     const onBike = nBike > 0 && (i % 3 !== 2 || nBike === routes.length) && cBike.length;
     const R = onBike ? pickRoute(cBike, 0) : cRoad.length ? pickRoute(cRoad, nBike) : pickRoute(cBike, 0);
@@ -5268,7 +5294,7 @@ function parkVehicles(W, cap, prob) {
   }
   // voitures qui circulent (sur le graphe routier)
   const aiList = [];
-  const nAI = W.graph ? perMap(W, { plateau: 80, quebec: 55, invente: 28 }, 30) : 0;
+  const nAI = W.graph ? nearMap(W, { plateau: 80, quebec: 55, invente: 28 }, 30) : 0;
   for (let k = 0; k < nAI; k++) {
     const type = pickW(TRAFFIC_TYPES, rand()), g = geos[type], V = VEHICLES[type], mass = PARK_MASS[type];
     const v = {
@@ -6618,7 +6644,7 @@ function buildPedestrians(W) {
   }
   scored.sort((a, b) => b.score - a.score);
   const routes = [];
-  const touristy = new Set(scored.slice(0, perMap(W, { plateau: 36, quebec: 36 }, 24)).map(q => q.way));
+  const touristy = new Set(scored.slice(0, nearMap(W, { plateau: 36, quebec: 36 }, 24)).map(q => q.way));
   // tous les trottoirs : les rues touristiques pèsent beaucoup plus lourd
   const all = scored.filter(q => touristy.has(q.way));
   for (const way of W.roadWays) {
@@ -6640,7 +6666,7 @@ function buildPedestrians(W) {
     }
   }
   if (!routes.length) return;
-  const N = perMap(W, { plateau: 850, quebec: 850, invente: 360 }, 400), list = [];
+  const N = nearMap(W, { plateau: 850, quebec: 850, invente: 360 }, 400), list = [];
   const cum = []; let tot = 0;
   for (const r of routes) { tot += r.weight; cum.push(tot); }
   const pickR = () => { const t = rand() * tot; let a = 0, b = cum.length - 1; while (a < b) { const m = (a + b) >> 1; if (cum[m] < t) a = m + 1; else b = m; } return routes[a]; };

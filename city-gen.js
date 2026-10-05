@@ -9,7 +9,7 @@
 'use strict';
 
 const DEM_STEP = 30;       // m entre deux points d'altitude
-const VERSION = 3;         // cartes générées : on recalcule celles d'une version plus ancienne (2 : banlieue ; 3 : viaducs, échangeurs)
+const VERSION = 6;         // cartes générées : on recalcule celles d'une version plus ancienne (2 : banlieue ; 3 : viaducs ; 4 : plex ; 5 : commerces ; 6 : voies ferrées)
 const MASK_CELL = 3;       // m par cellule du masque eau / verdure
 const COIN_COUNT = 32;
 
@@ -118,6 +118,7 @@ function queries(A) {
     ['schools', '(way["amenity"~"^(school|college|university|kindergarten)$"];relation["amenity"~"^(school|college|university)$"];);out geom;'],
     ['landmarks', Array.isArray(A.landmarks) ? `nwr["name"~"${A.landmarks.map(l => l[1].source.replace(/[\^$]/g, '')).join('|')}"];out center tags;` : AUTO_LANDMARKS],
   );
+  if (A.overpasses) q.push(['rails', 'way["railway"~"^(rail|light_rail|narrow_gauge|tram)$"];out geom tags;']);   // voies ferrées : ponts et viaducs au-dessus
   if (A.suburbs) q.push(['parking', '(way["amenity"="parking"];relation["amenity"="parking"];);out geom;']);   // restent asphaltés
   if (A.shops) q.push(['shops', '(nwr["name"]["shop"];nwr["name"]["amenity"~"^(restaurant|cafe|bar|pub|fast_food|ice_cream|pharmacy|bank|cinema|theatre|nightclub)$"];);out center tags;']);
   q.push(
@@ -304,18 +305,29 @@ async function compute(A, F, raw, log) {
     pedestrian: [6, 2], service: [5, 3],
   };
   if (A.overpasses) Object.assign(DRIVE, { motorway: [11, 0], motorway_link: [7, 0] });   // autoroutes et bretelles
-  // ---------- Ponts, viaducs et échangeurs (cartes générées) : hauteur de chaque point de route au-dessus du sol.
-  // Un pont sous lequel passe une autre route est un tablier à 6,5 m par niveau (layer) ; les routes qui y mènent
-  // (rampes d'échangeur, approches) montent à 6 %. Les autres ponts (ruisseau, rivière) restent au ras du sol. ----------
-  const elev = new Map();                                              // id de voie → { pts, e : hauteur par point, bridge }
+  // ---------- Ponts, viaducs et échangeurs (cartes générées) : hauteur de chaque point de route (et de voie ferrée)
+  // au-dessus du sol. Un pont sous lequel passe une route ou une voie ferrée est un tablier à 6,5 m par niveau (layer) ;
+  // ce qui y mène monte en rampe : 6 % pour une route (bretelles, approches), 2,5 % pour un chemin de fer (remblai).
+  // Les autres ponts (ruisseau, rivière) restent au ras du sol. Routes et rails ont chacun leur réseau : un passage
+  // à niveau ne soulève pas l'un avec l'autre. ----------
+  const elev = new Map(), railElev = new Map();                        // id de voie → { pts, e : hauteur par point, bridge }
+  const RAIL = /^(rail|light_rail|narrow_gauge|tram)$/;
   if (A.overpasses) {
-    const ways = [];
+    const isBridge = t => !!t.bridge && t.bridge !== 'no';
+    const roadWays = [], railWays = [];
     for (const w of roadsRaw.elements) {
       const t = w.tags || {};
       if (!DRIVE[t.highway] || t.area === 'yes' || t.tunnel === 'yes' || t.access === 'no') continue;
       const pts = toXZ(w.geometry || []);
-      if (pts.length >= 2) ways.push({ w, pts, layer: parseInt(t.layer, 10) || 0, bridge: !!t.bridge && t.bridge !== 'no' });
+      if (pts.length >= 2) roadWays.push({ w, pts, layer: parseInt(t.layer, 10) || 0, bridge: isBridge(t) });
     }
+    for (const w of (raw.rails || empty).elements) {
+      const t = w.tags || {};
+      if (!RAIL.test(t.railway || '') || t.tunnel === 'yes') continue;
+      const pts = toXZ(w.geometry || []);
+      if (pts.length >= 2) railWays.push({ w, pts, layer: parseInt(t.layer, 10) || 0, bridge: isBridge(t) });
+    }
+    const all = roadWays.concat(railWays);
     const crosses = (ax, az, bx, bz, cx, cz, dx, dz) => {
       const d = (bx - ax) * (dz - cz) - (bz - az) * (dx - cx);
       if (Math.abs(d) < 1e-9) return false;
@@ -323,71 +335,75 @@ async function compute(A, F, raw, log) {
       return t > 0.001 && t < 0.999 && u > 0.001 && u < 0.999;
     };
     const sg = new Grid(40);
-    ways.forEach((o, wi) => { for (let k = 0; k < o.pts.length - 1; k++) { const [ax, az] = o.pts[k], [bx, bz] = o.pts[k + 1]; sg.add([wi, k], Math.min(ax, bx), Math.min(az, bz), Math.max(ax, bx), Math.max(az, bz)); } });
-    const raised = new Set();                                          // ponts qui enjambent une route au sol (ou un pont plus bas)
-    ways.forEach((o, wi) => {
+    all.forEach((o, wi) => { for (let k = 0; k < o.pts.length - 1; k++) { const [ax, az] = o.pts[k], [bx, bz] = o.pts[k + 1]; sg.add([wi, k], Math.min(ax, bx), Math.min(az, bz), Math.max(ax, bx), Math.max(az, bz)); } });
+    const raised = new Set();                                          // ponts qui enjambent une route ou une voie ferrée (au sol, ou sur un pont plus bas)
+    all.forEach((o, wi) => {
       if (!o.bridge) return;
-      for (let k = 0; k < o.pts.length - 1 && !raised.has(wi); k++) {
+      for (let k = 0; k < o.pts.length - 1 && !raised.has(o); k++) {
         const [ax, az] = o.pts[k], [bx, bz] = o.pts[k + 1];
         for (const [wj, kj] of sg.near((ax + bx) / 2, (az + bz) / 2, Math.hypot(bx - ax, bz - az) / 2 + 1)) {
-          const p = ways[wj];
+          const p = all[wj];
           if (wj === wi || (p.bridge && p.layer >= o.layer)) continue;
           const [cx, cz] = p.pts[kj], [dx, dz] = p.pts[kj + 1];
-          if (crosses(ax, az, bx, bz, cx, cz, dx, dz)) { raised.add(wi); break; }
+          if (crosses(ax, az, bx, bz, cx, cz, dx, dz)) { raised.add(o); break; }
         }
       }
     });
-    // réseau des points (un nœud OSM partagé = même point) ; les tabliers fixent leur hauteur, puis on la propage en rampe
-    const vid = new Map(), E = [], nbr = [];
-    const vert = (x, z) => {
-      const key = `${Math.round(x * 20)},${Math.round(z * 20)}`;
-      let id = vid.get(key);
-      if (id === undefined) { id = E.length; vid.set(key, id); E.push(0); nbr.push([]); }
-      return id;
-    };
-    ways.forEach((o, wi) => {
-      o.ids = o.pts.map(([x, z]) => vert(x, z));
-      const H = raised.has(wi) ? 6.5 * Math.max(1, o.layer) : 0;
-      o.ids.forEach((id, k) => {
-        if (H) E[id] = Math.max(E[id], H);
-        if (!k) return;
-        const d = Math.hypot(o.pts[k][0] - o.pts[k - 1][0], o.pts[k][1] - o.pts[k - 1][1]);
-        nbr[id].push([o.ids[k - 1], d]);
-        nbr[o.ids[k - 1]].push([id, d]);
-      });
-    });
-    const GRADE = 0.06, heap = [];                                     // file de priorité : le plus haut d'abord
-    const push = (e, id) => {
-      heap.push([e, id]);
-      for (let i = heap.length - 1; i > 0;) { const p = (i - 1) >> 1; if (heap[p][0] >= heap[i][0]) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; }
-    };
-    const pop = () => {
-      const top = heap[0], last = heap.pop();
-      if (heap.length) {
-        heap[0] = last;
-        for (let i = 0; ;) {
-          const l = 2 * i + 1, r = l + 1;
-          let m = i;
-          if (l < heap.length && heap[l][0] > heap[m][0]) m = l;
-          if (r < heap.length && heap[r][0] > heap[m][0]) m = r;
-          if (m === i) break;
-          [heap[m], heap[i]] = [heap[i], heap[m]];
-          i = m;
-        }
+    // un réseau (un nœud OSM partagé = même point) : les tabliers fixent leur hauteur, puis on la propage en rampe
+    const solve = (ways, grade, out) => {
+      const vid = new Map(), E = [], nbr = [];
+      const vert = (x, z) => {
+        const key = `${Math.round(x * 20)},${Math.round(z * 20)}`;
+        let id = vid.get(key);
+        if (id === undefined) { id = E.length; vid.set(key, id); E.push(0); nbr.push([]); }
+        return id;
+      };
+      for (const o of ways) {
+        o.ids = o.pts.map(([x, z]) => vert(x, z));
+        const H = raised.has(o) ? 6.5 * Math.max(1, o.layer) : 0;
+        o.ids.forEach((id, k) => {
+          if (H) E[id] = Math.max(E[id], H);
+          if (!k) return;
+          const d = Math.hypot(o.pts[k][0] - o.pts[k - 1][0], o.pts[k][1] - o.pts[k - 1][1]);
+          nbr[id].push([o.ids[k - 1], d]);
+          nbr[o.ids[k - 1]].push([id, d]);
+        });
       }
-      return top;
+      const heap = [];                                                 // file de priorité : le plus haut d'abord
+      const push = (e, id) => {
+        heap.push([e, id]);
+        for (let i = heap.length - 1; i > 0;) { const p = (i - 1) >> 1; if (heap[p][0] >= heap[i][0]) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; }
+      };
+      const pop = () => {
+        const top = heap[0], last = heap.pop();
+        if (heap.length) {
+          heap[0] = last;
+          for (let i = 0; ;) {
+            const l = 2 * i + 1, r = l + 1;
+            let m = i;
+            if (l < heap.length && heap[l][0] > heap[m][0]) m = l;
+            if (r < heap.length && heap[r][0] > heap[m][0]) m = r;
+            if (m === i) break;
+            [heap[m], heap[i]] = [heap[i], heap[m]];
+            i = m;
+          }
+        }
+        return top;
+      };
+      E.forEach((e, id) => { if (e > 0) push(e, id); });
+      while (heap.length) {
+        const [e0, u] = pop();
+        if (e0 < E[u]) continue;
+        for (const [v, d] of nbr[u]) { const e = E[u] - d * grade; if (e > E[v] + 0.01) { E[v] = e; push(e, v); } }
+      }
+      for (const o of ways) {
+        const e = o.ids.map(id => E[id]);
+        if (e.some(v => v > 0.05)) out.set(o.w.id, { pts: o.pts, e, bridge: raised.has(o) });
+      }
     };
-    E.forEach((e, id) => { if (e > 0) push(e, id); });
-    while (heap.length) {
-      const [e0, u] = pop();
-      if (e0 < E[u]) continue;
-      for (const [v, d] of nbr[u]) { const e = E[u] - d * GRADE; if (e > E[v] + 0.01) { E[v] = e; push(e, v); } }
-    }
-    ways.forEach((o, wi) => {
-      const e = o.ids.map(id => E[id]);
-      if (e.some(v => v > 0.05)) elev.set(o.w.id, { pts: o.pts, e, bridge: raised.has(wi) });
-    });
-    await log(`  ${raised.size} ponts au-dessus d'une route, ${elev.size} voies surélevées (ponts, viaducs, rampes)`);
+    solve(roadWays, 0.06, elev);
+    solve(railWays, 0.025, railElev);
+    await log(`  ${raised.size} ponts au-dessus d'une route ou d'une voie ferrée, ${elev.size} routes et ${railElev.size} voies ferrées surélevées`);
   }
   // hauteur d'une voie surélevée au point (x, z) : sur son segment le plus proche
   const elevOn = (info, x, z) => {
@@ -453,6 +469,20 @@ async function compute(A, F, raw, log) {
     }
   }
   function clampW(v) { return Math.max(1.6, Math.min(4, v)); }
+  // ---------- Voies ferrées (cartes générées) : au sol, ou sur leur pont et leur remblai ----------
+  const rails = [];
+  if (A.overpasses) for (const w of (raw.rails || empty).elements) {
+    const t = w.tags || {};
+    if (!RAIL.test(t.railway || '') || t.tunnel === 'yes') continue;
+    const info = railElev.get(w.id);
+    for (const part of splitRegion(clipPolyline(toXZ(w.geometry || []), 20), KEEP)) {
+      const pts = info ? part : simplify(part, 0.3);
+      if (pts.length < 2) continue;
+      const r = { p: pts };
+      if (info) { const e = pts.map(([x, z]) => elevOn(info, x, z)); if (e.some(v => v > 0.05)) { r.e = e; if (info.bridge) r.b = 1; } }
+      rails.push(r);
+    }
+  }
   await log(`  ${bikes.filter(b => b.k === 0).length} pistes cyclables, ${bikes.filter(b => b.k === 1).length} bandes cyclables`);
 
   const segs = [];
@@ -731,6 +761,12 @@ async function compute(A, F, raw, log) {
       if ((b.t && b.t !== 'r') || b.n || b.rs === 'f' || b.rs === 'm') return;   // nommé (école, commerce…), toit plat ou mansardé
       const r = bRings[i], a = Math.abs(area(r)), [cx, cz] = centroid(r);
       if (a < 35 || a > 320 || !sparse(cx, cz)) return;
+      // isolée : un duplex, un triplex ou une maison en rangée a un mur mitoyen (une maison de banlieue, des cours tout autour)
+      for (const j of bGrid.near(cx, cz, Math.sqrt(a) + 4)) {
+        if (j === i) continue;
+        const o = bRings[j];
+        if (r.some(([x, z]) => pointInRing(x, z, o) || o.some((q, k) => segDist(x, z, q[0], q[1], o[(k + 1) % o.length][0], o[(k + 1) % o.length][1])[0] < 0.8))) return;
+      }
       // étages : ceux d'OSM, sinon bungalow (plain-pied) ou cottage (deux étages) ; les grandes emprises sont plus souvent des bungalows
       const lv = bTagged[i] ? Math.max(1, Math.min(3, b.l)) : hash(i * 31 + 7) < (a > 130 ? 0.6 : a > 95 ? 0.45 : 0.25) ? 1 : 2;
       b.t = 'h';
@@ -769,7 +805,16 @@ async function compute(A, F, raw, log) {
       if (garage) b.gar = 1;
       nd++;
     });
-    // pelouse partout où le secteur est peu bâti, sauf les rues (et un trottoir), les stationnements et les entrées
+    // pelouse autour des maisons (à moins de 70 m, dans un secteur peu bâti), sauf les rues (et un trottoir), les
+    // stationnements et les entrées : ni dans les cours du Plateau, ni dans le stationnement d'un centre commercial
+    const yards = new Uint8Array(gnx * gnz);
+    buildings.forEach((b, i) => {
+      if (b.t !== 'h') return;
+      const [x, z] = centroid(bRings[i]), i0 = Math.floor((x - mx0) / C), j0 = Math.floor((z - mz0) / C);
+      for (let j = Math.max(0, j0 - 7); j <= Math.min(gnz - 1, j0 + 7); j++) for (let ii = Math.max(0, i0 - 7); ii <= Math.min(gnx - 1, i0 + 7); ii++) {
+        if ((ii - i0) ** 2 + (j - j0) ** 2 <= 49) yards[j * gnx + ii] = 1;
+      }
+    });
     const paved = new Uint8Array(mnx * mnz);
     const stamp = (x, z, rad) => {
       const i0 = Math.max(0, Math.floor((x - rad - mx0) / MASK_CELL)), i1 = Math.min(mnx - 1, Math.floor((x + rad - mx0) / MASK_CELL));
@@ -795,7 +840,8 @@ async function compute(A, F, raw, log) {
     let nl = 0;
     for (let j = 0; j < mnz; j++) for (let i = 0; i < mnx; i++) {
       const k = j * mnx + i;
-      if (mask[k] !== 0 || paved[k] || !sparse(mx0 + (i + 0.5) * MASK_CELL, mz0 + (j + 0.5) * MASK_CELL)) continue;
+      const x = mx0 + (i + 0.5) * MASK_CELL, z = mz0 + (j + 0.5) * MASK_CELL;
+      if (mask[k] !== 0 || paved[k] || !yards[Math.floor((z - mz0) / C) * gnx + Math.floor((x - mx0) / C)] || !sparse(x, z)) continue;
       mask[k] = 2;
       nl++;
     }
@@ -1054,6 +1100,7 @@ async function compute(A, F, raw, log) {
     buildings, walls, gates, trees, landmarks, coins, spawn,
     areas: areas.map(({ n, p }) => ({ n, p })),
     bikes,
+    ...(rails.length ? { rails: rails.map(r => ({ p: flat(r.p), ...(r.e ? { e: r.e.map(round1), ...(r.b ? { b: 1 } : {}) } : {}) })) } : {}),
     shops: shops.map(s => ({ n: s.n, c: s.c, b: s.b, x: round1(s.x), z: round1(s.z) })),
     addr, statues, sports,
     limit: limit ? flat(limit) : null,
@@ -1092,11 +1139,11 @@ function liveArea(place, radius) {
   return {
     boundary: { drive: 12, keep: 120 }, lines: [ring],
     river: 'auto',
-    levels: [[2, 0.35], [3, 0.5], [4, 0.15]],   // étages quand OSM ne dit rien (les maisons de banlieue ont les leurs)
+    levels: [[2, 0.3], [3, 0.55], [4, 0.15]],   // étages quand OSM ne dit rien : comme le Plateau fourni (les maisons de banlieue ont les leurs)
     suburbs: true,
     overpasses: true,                                  // autoroutes, ponts, viaducs et échangeurs
     maxTrees: Math.round(Math.min(9000, 1000 * km2)),
-    shops: Math.round(Math.min(700, 80 * km2)),
+    shops: Math.round(Math.min(1500, 220 * km2)),       // densité d'une rue commerçante du Plateau (~210 au km²)
     landmarks: 'auto',
   };
 }
